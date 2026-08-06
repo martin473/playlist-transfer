@@ -1,0 +1,41 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Reports and output
+reports/
+*.log
+
+# OAuth client-secret files
+client_secret*.json
+credentials*.json
+
+# Token exports
+*.token
+*.key
+
+# Node modules
+node_modules/
+
+# Build artifacts
+*.egg-info/
+*.egg
+build/
+dist/
+
+# IDE directories
+.vscode/
+.idea/
