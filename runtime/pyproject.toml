@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "playlist-bridge"
+version = "0.1.0"
+description = "Playlist transfer tool between Spotify and YouTube"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Martin", email = "martin473@example.com"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "typer>=0.9.0",
+    "spotipy>=2.23.0",
+    "google-api-python-client>=2.108.0",
+    "google-auth-oauthlib>=1.1.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.12.0",
+    "python-dotenv>=1.0.0",
+    "keyring>=24.0.0",
+    "click>=8.1.0",
+]
+
+[project.scripts]
+playlist-bridge = "playlist_bridge.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/playlist_bridge"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+]
