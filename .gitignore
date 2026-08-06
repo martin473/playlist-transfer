@@ -26,6 +26,7 @@ credentials*.json
 # Token exports
 *.token
 *.key
+token-export.json
 
 # Node modules
 node_modules/
