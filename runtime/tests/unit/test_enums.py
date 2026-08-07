@@ -1,7 +1,15 @@
 """Unit tests for domain enums."""
 
 import pytest
-from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService, TrackStatus, TransferMode
+from playlist_bridge.domain.enums import (
+    DestinationService,
+    JobStatus,
+    SourceService,
+    TERMINAL_JOB_STATUSES,
+    TrackStatus,
+    TransferMode,
+    is_terminal_job_status,
+)
 
 
 class TestSourceService:
@@ -122,6 +130,32 @@ class TestJobStatus:
         assert JobStatus("completed") == JobStatus.COMPLETED
         assert JobStatus("failed") == JobStatus.FAILED
         assert JobStatus("cancelled") == JobStatus.CANCELLED
+
+    def test_terminal_job_statuses(self) -> None:
+        """Test that TERMINAL_JOB_STATUSES contains only completed, failed, and cancelled."""
+        expected = frozenset(
+            [
+                JobStatus.COMPLETED,
+                JobStatus.FAILED,
+                JobStatus.CANCELLED,
+            ]
+        )
+        assert TERMINAL_JOB_STATUSES == expected
+
+    def test_is_terminal_job_status(self) -> None:
+        """Test that is_terminal_job_status returns True only for terminal states."""
+        # Terminal statuses should return True
+        assert is_terminal_job_status(JobStatus.COMPLETED) is True
+        assert is_terminal_job_status(JobStatus.FAILED) is True
+        assert is_terminal_job_status(JobStatus.CANCELLED) is True
+
+        # Non-terminal statuses should return False
+        assert is_terminal_job_status(JobStatus.PENDING) is False
+        assert is_terminal_job_status(JobStatus.READING) is False
+        assert is_terminal_job_status(JobStatus.MATCHING) is False
+        assert is_terminal_job_status(JobStatus.REVIEW) is False
+        assert is_terminal_job_status(JobStatus.WRITING) is False
+        assert is_terminal_job_status(JobStatus.VERIFYING) is False
 
 
 class TestTransferMode:

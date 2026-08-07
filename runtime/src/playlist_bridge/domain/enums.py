@@ -47,6 +47,29 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+#: Set of terminal job statuses that represent final states.
+#: Terminal statuses are those where no further work can or will be done.
+TERMINAL_JOB_STATUSES: frozenset[JobStatus] = frozenset(
+    [
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    ]
+)
+
+
+def is_terminal_job_status(status: JobStatus) -> bool:
+    """Return True if the job status is terminal (completed, failed, or cancelled).
+
+    Args:
+        status: The job status to check.
+
+    Returns:
+        bool: True if the status is terminal, False otherwise.
+    """
+    return status in TERMINAL_JOB_STATUSES
+
+
 class MatchPolicy(str, Enum):
     """Match policy controlling how aggressively matches are accepted.
 
