@@ -2,7 +2,9 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from playlist_bridge.domain.enums import MatchPolicy, TransferMode
 
 
 class SpotifyCandidate(BaseModel):
@@ -220,3 +222,85 @@ class MatchDecision(BaseModel):
     def validate_ranked_alternatives(cls, v: list[SpotifyCandidate], info) -> list[SpotifyCandidate]:
         """Validate that ranked_alternatives is a list (always valid)."""
         return v
+
+
+class TransferRequest(BaseModel):
+    """A request to transfer a playlist from a source to a destination.
+
+    Attributes:
+        source_url: URL of the source playlist (e.g., YouTube playlist URL).
+        source_profile: Profile name for the source service (e.g., YouTube profile).
+        spotify_profile: Profile name for the Spotify destination account.
+        destination_name: Name to give the destination playlist.
+        mode: Transfer mode (dry_run, create, merge, replace).
+        match_policy: Policy for accepting matches (strict, balanced, loose).
+        public: Whether the destination playlist should be public.
+
+    Example:
+        >>> request = TransferRequest(
+        ...     source_url="https://www.youtube.com/playlist?list=PL123",
+        ...     source_profile="youtube_user",
+        ...     spotify_profile="spotify_user",
+        ...     destination_name="My Playlist",
+        ...     mode=TransferMode.CREATE,
+        ...     match_policy=MatchPolicy.BALANCED,
+        ...     public=False,
+        ... )
+        >>> request.source_url
+        'https://www.youtube.com/playlist?list=PL123'
+    """
+
+    model_config = {"extra": "forbid"}
+
+    source_url: str = Field(description="URL of the source playlist")
+    source_profile: str = Field(description="Profile name for the source service")
+    spotify_profile: str = Field(description="Profile name for the Spotify destination account")
+    destination_name: str = Field(description="Name to give the destination playlist")
+    mode: TransferMode = Field(default=TransferMode.DRY_RUN, description="Transfer mode")
+    match_policy: MatchPolicy = Field(default=MatchPolicy.BALANCED, description="Policy for accepting matches")
+    public: bool = Field(default=False, description="Whether the destination playlist should be public")
+
+    @field_validator("source_url")
+    @classmethod
+    def validate_source_url(cls, v: str) -> str:
+        """Validate that source_url is not empty."""
+        if not v or not v.strip():
+            raise ValueError("source_url cannot be empty")
+        return v
+
+    @field_validator("source_profile")
+    @classmethod
+    def validate_source_profile(cls, v: str) -> str:
+        """Validate that source_profile is not empty."""
+        if not v or not v.strip():
+            raise ValueError("source_profile cannot be empty")
+        return v
+
+    @field_validator("spotify_profile")
+    @classmethod
+    def validate_spotify_profile(cls, v: str) -> str:
+        """Validate that spotify_profile is not empty."""
+        if not v or not v.strip():
+            raise ValueError("spotify_profile cannot be empty")
+        return v
+
+    @field_validator("destination_name")
+    @classmethod
+    def validate_destination_name(cls, v: str) -> str:
+        """Validate that destination_name is not empty."""
+        if not v or not v.strip():
+            raise ValueError("destination_name cannot be empty")
+        return v
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "TransferRequest":
+        """Validate that all required fields are present."""
+        # This is a safety net - the field validators above handle empty strings,
+        # but we also want to ensure profiles aren't just whitespace.
+        if self.source_profile and not self.source_profile.strip():
+            raise ValueError("source_profile cannot be whitespace only")
+        if self.spotify_profile and not self.spotify_profile.strip():
+            raise ValueError("spotify_profile cannot be whitespace only")
+        if self.destination_name and not self.destination_name.strip():
+            raise ValueError("destination_name cannot be whitespace only")
+        return self

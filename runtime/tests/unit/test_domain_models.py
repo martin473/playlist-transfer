@@ -610,3 +610,168 @@ class TestMatchDecision:
         assert data["score"]["total_score"] == 0.94
         assert data["reason"] == "Good match"
         assert data["ranked_alternatives"] == []
+
+
+class TestTransferRequest:
+    """Tests for the TransferRequest model."""
+
+    def test_create_valid_request(self) -> None:
+        """Test creating a valid TransferRequest with all fields."""
+        from playlist_bridge.domain.enums import MatchPolicy, TransferMode
+        from playlist_bridge.domain.models import TransferRequest
+
+        request = TransferRequest(
+            source_url="https://www.youtube.com/playlist?list=PL123",
+            source_profile="youtube_user",
+            spotify_profile="spotify_user",
+            destination_name="My Playlist",
+            mode=TransferMode.CREATE,
+            match_policy=MatchPolicy.STRICT,
+            public=True,
+        )
+
+        assert request.source_url == "https://www.youtube.com/playlist?list=PL123"
+        assert request.source_profile == "youtube_user"
+        assert request.spotify_profile == "spotify_user"
+        assert request.destination_name == "My Playlist"
+        assert request.mode == TransferMode.CREATE
+        assert request.match_policy == MatchPolicy.STRICT
+        assert request.public is True
+
+    def test_default_values(self) -> None:
+        """Test that default values are applied correctly."""
+        from playlist_bridge.domain.enums import MatchPolicy, TransferMode
+        from playlist_bridge.domain.models import TransferRequest
+
+        request = TransferRequest(
+            source_url="https://www.youtube.com/playlist?list=PL123",
+            source_profile="youtube_user",
+            spotify_profile="spotify_user",
+            destination_name="My Playlist",
+        )
+
+        assert request.mode == TransferMode.DRY_RUN
+        assert request.match_policy == MatchPolicy.BALANCED
+        assert request.public is False
+
+    def test_blank_source_url_is_rejected(self) -> None:
+        """Test that a blank source_url is rejected."""
+        from playlist_bridge.domain.models import TransferRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferRequest(
+                source_url="",
+                source_profile="youtube_user",
+                spotify_profile="spotify_user",
+                destination_name="My Playlist",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("source_url cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_blank_source_profile_is_rejected(self) -> None:
+        """Test that a blank source_profile is rejected."""
+        from playlist_bridge.domain.models import TransferRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferRequest(
+                source_url="https://www.youtube.com/playlist?list=PL123",
+                source_profile="",
+                spotify_profile="spotify_user",
+                destination_name="My Playlist",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("source_profile cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_blank_spotify_profile_is_rejected(self) -> None:
+        """Test that a blank spotify_profile is rejected."""
+        from playlist_bridge.domain.models import TransferRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferRequest(
+                source_url="https://www.youtube.com/playlist?list=PL123",
+                source_profile="youtube_user",
+                spotify_profile="",
+                destination_name="My Playlist",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("spotify_profile cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_blank_destination_name_is_rejected(self) -> None:
+        """Test that a blank destination_name is rejected."""
+        from playlist_bridge.domain.models import TransferRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferRequest(
+                source_url="https://www.youtube.com/playlist?list=PL123",
+                source_profile="youtube_user",
+                spotify_profile="spotify_user",
+                destination_name="",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("destination_name cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_whitespace_only_values_are_rejected(self) -> None:
+        """Test that whitespace-only values are rejected."""
+        from playlist_bridge.domain.models import TransferRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferRequest(
+                source_url="   ",
+                source_profile="   ",
+                spotify_profile="   ",
+                destination_name="   ",
+            )
+
+        errors = exc_info.value.errors()
+        # The field validators catch the first violation
+        assert any("source_url cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_request_round_trip_serialization(self) -> None:
+        """Test that TransferRequest round-trips through serialization."""
+        from playlist_bridge.domain.enums import MatchPolicy, TransferMode
+        from playlist_bridge.domain.models import TransferRequest
+
+        original = TransferRequest(
+            source_url="https://www.youtube.com/playlist?list=PL123",
+            source_profile="youtube_user",
+            spotify_profile="spotify_user",
+            destination_name="My Playlist",
+            mode=TransferMode.REPLACE,
+            match_policy=MatchPolicy.LOOSE,
+            public=False,
+        )
+
+        data = original.model_dump()
+        reconstructed = TransferRequest(**data)
+
+        assert reconstructed.source_url == original.source_url
+        assert reconstructed.source_profile == original.source_profile
+        assert reconstructed.spotify_profile == original.spotify_profile
+        assert reconstructed.destination_name == original.destination_name
+        assert reconstructed.mode == original.mode
+        assert reconstructed.match_policy == original.match_policy
+        assert reconstructed.public == original.public
+
+    def test_unknown_fields_are_rejected(self) -> None:
+        """Test that unknown fields are rejected by the model."""
+        from playlist_bridge.domain.models import TransferRequest
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferRequest(
+                source_url="https://www.youtube.com/playlist?list=PL123",
+                source_profile="youtube_user",
+                spotify_profile="spotify_user",
+                destination_name="My Playlist",
+                destination_profile="extra",  # Unknown field
+                policy="loose",  # Unknown field
+                visibility="public",  # Unknown field
+            )
+
+        # Pydantic will reject unknown fields
+        errors = exc_info.value.errors()
+        # Check that at least one error mentions an unknown field
+        assert any("Extra inputs are not permitted" in err.get("msg", "") for err in errors)
