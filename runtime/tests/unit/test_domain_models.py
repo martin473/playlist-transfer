@@ -3,7 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from playlist_bridge.domain.models import MatchDecision, MatchScore, SpotifyCandidate, SourcePlaylistMetadata
+from playlist_bridge.domain.models import MatchDecision, MatchScore, NormalizedTrackHint, SpotifyCandidate, SourcePlaylistMetadata
+
 
 
 class TestSpotifyCandidate:
@@ -775,6 +776,219 @@ class TestTransferRequest:
         # Pydantic will reject unknown fields
         errors = exc_info.value.errors()
         # Check that at least one error mentions an unknown field
+        assert any("Extra inputs are not permitted" in err.get("msg", "") for err in errors)
+
+
+class TestNormalizedTrackHint:
+    """Tests for the NormalizedTrackHint model."""
+
+    def test_create_valid_hint(self) -> None:
+        """Test creating a valid NormalizedTrackHint."""
+        hint = NormalizedTrackHint(
+            source_item_id="video_123",
+            normalized_title="Bohemian Rhapsody",
+            artist_hints=("Queen",),
+            version_tokens=(),
+            unwanted_flags=(),
+            duration_ms=354000,
+            classification="song",
+            explicit_evidence=False,
+        )
+
+        assert hint.source_item_id == "video_123"
+        assert hint.normalized_title == "Bohemian Rhapsody"
+        assert hint.artist_hints == ("Queen",)
+        assert hint.version_tokens == ()
+        assert hint.unwanted_flags == ()
+        assert hint.duration_ms == 354000
+        assert hint.classification == "song"
+        assert hint.explicit_evidence is False
+
+    def test_hint_with_empty_source_item_id_is_rejected(self) -> None:
+        """Test that an empty source_item_id is rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="",
+                normalized_title="Bohemian Rhapsody",
+                artist_hints=("Queen",),
+                version_tokens=(),
+                unwanted_flags=(),
+                classification="song",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("source_item_id cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_hint_with_empty_normalized_title_is_rejected(self) -> None:
+        """Test that an empty normalized_title is rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="",
+                artist_hints=("Queen",),
+                version_tokens=(),
+                unwanted_flags=(),
+                classification="song",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("normalized_title cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_hint_with_empty_artist_hints_is_rejected(self) -> None:
+        """Test that empty artist_hints is rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="Bohemian Rhapsody",
+                artist_hints=(),
+                version_tokens=(),
+                unwanted_flags=(),
+                classification="song",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("artist_hints cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_hint_with_empty_classification_is_rejected(self) -> None:
+        """Test that an empty classification is rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="Bohemian Rhapsody",
+                artist_hints=("Queen",),
+                version_tokens=(),
+                unwanted_flags=(),
+                classification="",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("classification cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_hint_version_tokens_must_be_sorted_and_unique(self) -> None:
+        """Test that version_tokens must be sorted and unique."""
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="Bohemian Rhapsody (Live Remix)",
+                artist_hints=("Queen",),
+                version_tokens=("remix", "live"),  # Not sorted
+                unwanted_flags=(),
+                classification="song",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("version_tokens must be sorted" in err.get("msg", "") for err in errors)
+
+        # Test duplicate tokens
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="Bohemian Rhapsody (Live Live)",
+                artist_hints=("Queen",),
+                version_tokens=("live", "live"),  # Duplicate
+                unwanted_flags=(),
+                classification="song",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("version_tokens must be unique" in err.get("msg", "") for err in errors)
+
+        # Test uppercase tokens
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="Bohemian Rhapsody (LIVE)",
+                artist_hints=("Queen",),
+                version_tokens=("LIVE",),
+                unwanted_flags=(),
+                classification="song",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("version_tokens must be lowercase" in err.get("msg", "") for err in errors)
+
+    def test_hint_unwanted_flags_must_be_sorted_and_unique(self) -> None:
+        """Test that unwanted_flags must be sorted and unique."""
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="Bohemian Rhapsody",
+                artist_hints=("Queen",),
+                version_tokens=(),
+                unwanted_flags=("karaoke", "cover"),  # Not sorted
+                classification="song",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("unwanted_flags must be sorted" in err.get("msg", "") for err in errors)
+
+        # Test duplicate flags
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="Bohemian Rhapsody",
+                artist_hints=("Queen",),
+                version_tokens=(),
+                unwanted_flags=("cover", "cover"),  # Duplicate
+                classification="song",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("unwanted_flags must be unique" in err.get("msg", "") for err in errors)
+
+        # Test uppercase flags
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="Bohemian Rhapsody",
+                artist_hints=("Queen",),
+                version_tokens=(),
+                unwanted_flags=("COVER",),
+                classification="song",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("unwanted_flags must be lowercase" in err.get("msg", "") for err in errors)
+
+    def test_hint_round_trip_serialization(self) -> None:
+        """Test that NormalizedTrackHint round-trips through serialization."""
+        original = NormalizedTrackHint(
+            source_item_id="video_456",
+            normalized_title="Bohemian Rhapsody (Live Remix)",
+            artist_hints=("Queen", "Freddie Mercury"),
+            version_tokens=("live", "remix"),
+            unwanted_flags=("cover", "karaoke"),
+            duration_ms=354000,
+            classification="song",
+            explicit_evidence=False,
+        )
+
+        data = original.model_dump()
+        reconstructed = NormalizedTrackHint(**data)
+
+        assert reconstructed.source_item_id == original.source_item_id
+        assert reconstructed.normalized_title == original.normalized_title
+        assert reconstructed.artist_hints == original.artist_hints
+        assert reconstructed.version_tokens == original.version_tokens
+        assert reconstructed.unwanted_flags == original.unwanted_flags
+        assert reconstructed.duration_ms == original.duration_ms
+        assert reconstructed.classification == original.classification
+        assert reconstructed.explicit_evidence == original.explicit_evidence
+
+    def test_hint_rejects_extra_fields(self) -> None:
+        """Test that extra fields are rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            NormalizedTrackHint(
+                source_item_id="video_123",
+                normalized_title="Bohemian Rhapsody",
+                artist_hints=("Queen",),
+                version_tokens=(),
+                unwanted_flags=(),
+                classification="song",
+                extra_field="extra",
+            )
+
+        errors = exc_info.value.errors()
         assert any("Extra inputs are not permitted" in err.get("msg", "") for err in errors)
 
 

@@ -136,6 +136,121 @@ class SourceTrack(BaseModel):
         return super().model_dump(**kwargs)
 
 
+class NormalizedTrackHint(BaseModel):
+    """A normalized hint for matching a source track to a destination track.
+
+    This model represents a normalized version of a source track's metadata,
+    with fields prepared for matching against Spotify candidates. All collections
+    are sorted and unique to ensure deterministic matching.
+
+    Attributes:
+        source_item_id: Unique identifier for the source item.
+        normalized_title: Normalized title text.
+        artist_hints: Sorted tuple of artist/channel name hints.
+        version_tokens: Sorted unique lowercase version tokens (e.g., "remix", "live").
+        unwanted_flags: Sorted unique lowercase unwanted version flags.
+        duration_ms: Optional duration in milliseconds.
+        classification: Classification string (e.g., "song", "podcast").
+        explicit_evidence: Optional boolean indicating explicit content.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    source_item_id: str = Field(description="Unique identifier for the source item")
+    normalized_title: str = Field(description="Normalized title text")
+    artist_hints: tuple[str, ...] = Field(
+        description="Sorted tuple of artist/channel name hints",
+    )
+    version_tokens: tuple[str, ...] = Field(
+        description="Sorted unique lowercase version tokens",
+    )
+    unwanted_flags: tuple[str, ...] = Field(
+        description="Sorted unique lowercase unwanted version flags",
+    )
+    duration_ms: Optional[int] = Field(
+        default=None,
+        description="Duration in milliseconds",
+        ge=0,
+    )
+    classification: str = Field(description="Classification string")
+    explicit_evidence: Optional[bool] = Field(
+        default=None,
+        description="Boolean indicating explicit content",
+    )
+
+    @field_validator("source_item_id")
+    @classmethod
+    def validate_source_item_id(cls, v: str) -> str:
+        """Validate that source_item_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("source_item_id cannot be empty")
+        return v
+
+    @field_validator("normalized_title")
+    @classmethod
+    def validate_normalized_title(cls, v: str) -> str:
+        """Validate that normalized_title is not empty."""
+        if not v or not v.strip():
+            raise ValueError("normalized_title cannot be empty")
+        return v
+
+    @field_validator("classification")
+    @classmethod
+    def validate_classification(cls, v: str) -> str:
+        """Validate that classification is not empty."""
+        if not v or not v.strip():
+            raise ValueError("classification cannot be empty")
+        return v
+
+    @field_validator("version_tokens")
+    @classmethod
+    def validate_version_tokens(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that version_tokens are sorted and unique."""
+        if not all(isinstance(t, str) for t in v):
+            raise ValueError("version_tokens must contain only strings")
+        # Check that all tokens are lowercase
+        if any(t != t.lower() for t in v):
+            raise ValueError("version_tokens must be lowercase")
+        # Check for duplicates
+        if len(set(v)) != len(v):
+            raise ValueError("version_tokens must be unique")
+        # Check sorted order
+        if list(v) != sorted(v):
+            raise ValueError("version_tokens must be sorted")
+        return v
+
+    @field_validator("unwanted_flags")
+    @classmethod
+    def validate_unwanted_flags(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that unwanted_flags are sorted and unique."""
+        if not all(isinstance(f, str) for f in v):
+            raise ValueError("unwanted_flags must contain only strings")
+        # Check that all flags are lowercase
+        if any(f != f.lower() for f in v):
+            raise ValueError("unwanted_flags must be lowercase")
+        # Check for duplicates
+        if len(set(v)) != len(v):
+            raise ValueError("unwanted_flags must be unique")
+        # Check sorted order
+        if list(v) != sorted(v):
+            raise ValueError("unwanted_flags must be sorted")
+        return v
+
+    @field_validator("artist_hints")
+    @classmethod
+    def validate_artist_hints(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that artist_hints is not empty and tuple elements are strings."""
+        if not v:
+            raise ValueError("artist_hints cannot be empty")
+        if not all(isinstance(a, str) for a in v):
+            raise ValueError("artist_hints must contain only strings")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
 class LoadedSourcePlaylist(BaseModel):
     """A fully loaded source playlist with metadata and ordered tracks.
 
@@ -284,6 +399,121 @@ class SourceTrack(BaseModel):
         """Validate that video_id is not empty."""
         if not v or not v.strip():
             raise ValueError("video_id cannot be empty")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
+class NormalizedTrackHint(BaseModel):
+    """A normalized hint for matching a source track to a destination track.
+
+    This model represents a normalized version of a source track's metadata,
+    with fields prepared for matching against Spotify candidates. All collections
+    are sorted and unique to ensure deterministic matching.
+
+    Attributes:
+        source_item_id: Unique identifier for the source item.
+        normalized_title: Normalized title text.
+        artist_hints: Sorted tuple of artist/channel name hints.
+        version_tokens: Sorted unique lowercase version tokens (e.g., "remix", "live").
+        unwanted_flags: Sorted unique lowercase unwanted version flags.
+        duration_ms: Optional duration in milliseconds.
+        classification: Classification string (e.g., "song", "podcast").
+        explicit_evidence: Optional boolean indicating explicit content.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    source_item_id: str = Field(description="Unique identifier for the source item")
+    normalized_title: str = Field(description="Normalized title text")
+    artist_hints: tuple[str, ...] = Field(
+        description="Sorted tuple of artist/channel name hints",
+    )
+    version_tokens: tuple[str, ...] = Field(
+        description="Sorted unique lowercase version tokens",
+    )
+    unwanted_flags: tuple[str, ...] = Field(
+        description="Sorted unique lowercase unwanted version flags",
+    )
+    duration_ms: Optional[int] = Field(
+        default=None,
+        description="Duration in milliseconds",
+        ge=0,
+    )
+    classification: str = Field(description="Classification string")
+    explicit_evidence: Optional[bool] = Field(
+        default=None,
+        description="Boolean indicating explicit content",
+    )
+
+    @field_validator("source_item_id")
+    @classmethod
+    def validate_source_item_id(cls, v: str) -> str:
+        """Validate that source_item_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("source_item_id cannot be empty")
+        return v
+
+    @field_validator("normalized_title")
+    @classmethod
+    def validate_normalized_title(cls, v: str) -> str:
+        """Validate that normalized_title is not empty."""
+        if not v or not v.strip():
+            raise ValueError("normalized_title cannot be empty")
+        return v
+
+    @field_validator("classification")
+    @classmethod
+    def validate_classification(cls, v: str) -> str:
+        """Validate that classification is not empty."""
+        if not v or not v.strip():
+            raise ValueError("classification cannot be empty")
+        return v
+
+    @field_validator("version_tokens")
+    @classmethod
+    def validate_version_tokens(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that version_tokens are sorted and unique."""
+        if not all(isinstance(t, str) for t in v):
+            raise ValueError("version_tokens must contain only strings")
+        # Check that all tokens are lowercase
+        if any(t != t.lower() for t in v):
+            raise ValueError("version_tokens must be lowercase")
+        # Check for duplicates
+        if len(set(v)) != len(v):
+            raise ValueError("version_tokens must be unique")
+        # Check sorted order
+        if list(v) != sorted(v):
+            raise ValueError("version_tokens must be sorted")
+        return v
+
+    @field_validator("unwanted_flags")
+    @classmethod
+    def validate_unwanted_flags(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that unwanted_flags are sorted and unique."""
+        if not all(isinstance(f, str) for f in v):
+            raise ValueError("unwanted_flags must contain only strings")
+        # Check that all flags are lowercase
+        if any(f != f.lower() for f in v):
+            raise ValueError("unwanted_flags must be lowercase")
+        # Check for duplicates
+        if len(set(v)) != len(v):
+            raise ValueError("unwanted_flags must be unique")
+        # Check sorted order
+        if list(v) != sorted(v):
+            raise ValueError("unwanted_flags must be sorted")
+        return v
+
+    @field_validator("artist_hints")
+    @classmethod
+    def validate_artist_hints(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that artist_hints is not empty and tuple elements are strings."""
+        if not v:
+            raise ValueError("artist_hints cannot be empty")
+        if not all(isinstance(a, str) for a in v):
+            raise ValueError("artist_hints must contain only strings")
         return v
 
     def model_dump(self, **kwargs) -> dict:
@@ -852,6 +1082,121 @@ class SourceTrack(BaseModel):
         return super().model_dump(**kwargs)
 
 
+class NormalizedTrackHint(BaseModel):
+    """A normalized hint for matching a source track to a destination track.
+
+    This model represents a normalized version of a source track's metadata,
+    with fields prepared for matching against Spotify candidates. All collections
+    are sorted and unique to ensure deterministic matching.
+
+    Attributes:
+        source_item_id: Unique identifier for the source item.
+        normalized_title: Normalized title text.
+        artist_hints: Sorted tuple of artist/channel name hints.
+        version_tokens: Sorted unique lowercase version tokens (e.g., "remix", "live").
+        unwanted_flags: Sorted unique lowercase unwanted version flags.
+        duration_ms: Optional duration in milliseconds.
+        classification: Classification string (e.g., "song", "podcast").
+        explicit_evidence: Optional boolean indicating explicit content.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    source_item_id: str = Field(description="Unique identifier for the source item")
+    normalized_title: str = Field(description="Normalized title text")
+    artist_hints: tuple[str, ...] = Field(
+        description="Sorted tuple of artist/channel name hints",
+    )
+    version_tokens: tuple[str, ...] = Field(
+        description="Sorted unique lowercase version tokens",
+    )
+    unwanted_flags: tuple[str, ...] = Field(
+        description="Sorted unique lowercase unwanted version flags",
+    )
+    duration_ms: Optional[int] = Field(
+        default=None,
+        description="Duration in milliseconds",
+        ge=0,
+    )
+    classification: str = Field(description="Classification string")
+    explicit_evidence: Optional[bool] = Field(
+        default=None,
+        description="Boolean indicating explicit content",
+    )
+
+    @field_validator("source_item_id")
+    @classmethod
+    def validate_source_item_id(cls, v: str) -> str:
+        """Validate that source_item_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("source_item_id cannot be empty")
+        return v
+
+    @field_validator("normalized_title")
+    @classmethod
+    def validate_normalized_title(cls, v: str) -> str:
+        """Validate that normalized_title is not empty."""
+        if not v or not v.strip():
+            raise ValueError("normalized_title cannot be empty")
+        return v
+
+    @field_validator("classification")
+    @classmethod
+    def validate_classification(cls, v: str) -> str:
+        """Validate that classification is not empty."""
+        if not v or not v.strip():
+            raise ValueError("classification cannot be empty")
+        return v
+
+    @field_validator("version_tokens")
+    @classmethod
+    def validate_version_tokens(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that version_tokens are sorted and unique."""
+        if not all(isinstance(t, str) for t in v):
+            raise ValueError("version_tokens must contain only strings")
+        # Check that all tokens are lowercase
+        if any(t != t.lower() for t in v):
+            raise ValueError("version_tokens must be lowercase")
+        # Check for duplicates
+        if len(set(v)) != len(v):
+            raise ValueError("version_tokens must be unique")
+        # Check sorted order
+        if list(v) != sorted(v):
+            raise ValueError("version_tokens must be sorted")
+        return v
+
+    @field_validator("unwanted_flags")
+    @classmethod
+    def validate_unwanted_flags(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that unwanted_flags are sorted and unique."""
+        if not all(isinstance(f, str) for f in v):
+            raise ValueError("unwanted_flags must contain only strings")
+        # Check that all flags are lowercase
+        if any(f != f.lower() for f in v):
+            raise ValueError("unwanted_flags must be lowercase")
+        # Check for duplicates
+        if len(set(v)) != len(v):
+            raise ValueError("unwanted_flags must be unique")
+        # Check sorted order
+        if list(v) != sorted(v):
+            raise ValueError("unwanted_flags must be sorted")
+        return v
+
+    @field_validator("artist_hints")
+    @classmethod
+    def validate_artist_hints(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that artist_hints is not empty and tuple elements are strings."""
+        if not v:
+            raise ValueError("artist_hints cannot be empty")
+        if not all(isinstance(a, str) for a in v):
+            raise ValueError("artist_hints must contain only strings")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
 class LoadedSourcePlaylist(BaseModel):
     """A fully loaded source playlist with metadata and ordered tracks.
 
@@ -1000,6 +1345,121 @@ class SourceTrack(BaseModel):
         """Validate that video_id is not empty."""
         if not v or not v.strip():
             raise ValueError("video_id cannot be empty")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
+class NormalizedTrackHint(BaseModel):
+    """A normalized hint for matching a source track to a destination track.
+
+    This model represents a normalized version of a source track's metadata,
+    with fields prepared for matching against Spotify candidates. All collections
+    are sorted and unique to ensure deterministic matching.
+
+    Attributes:
+        source_item_id: Unique identifier for the source item.
+        normalized_title: Normalized title text.
+        artist_hints: Sorted tuple of artist/channel name hints.
+        version_tokens: Sorted unique lowercase version tokens (e.g., "remix", "live").
+        unwanted_flags: Sorted unique lowercase unwanted version flags.
+        duration_ms: Optional duration in milliseconds.
+        classification: Classification string (e.g., "song", "podcast").
+        explicit_evidence: Optional boolean indicating explicit content.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    source_item_id: str = Field(description="Unique identifier for the source item")
+    normalized_title: str = Field(description="Normalized title text")
+    artist_hints: tuple[str, ...] = Field(
+        description="Sorted tuple of artist/channel name hints",
+    )
+    version_tokens: tuple[str, ...] = Field(
+        description="Sorted unique lowercase version tokens",
+    )
+    unwanted_flags: tuple[str, ...] = Field(
+        description="Sorted unique lowercase unwanted version flags",
+    )
+    duration_ms: Optional[int] = Field(
+        default=None,
+        description="Duration in milliseconds",
+        ge=0,
+    )
+    classification: str = Field(description="Classification string")
+    explicit_evidence: Optional[bool] = Field(
+        default=None,
+        description="Boolean indicating explicit content",
+    )
+
+    @field_validator("source_item_id")
+    @classmethod
+    def validate_source_item_id(cls, v: str) -> str:
+        """Validate that source_item_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("source_item_id cannot be empty")
+        return v
+
+    @field_validator("normalized_title")
+    @classmethod
+    def validate_normalized_title(cls, v: str) -> str:
+        """Validate that normalized_title is not empty."""
+        if not v or not v.strip():
+            raise ValueError("normalized_title cannot be empty")
+        return v
+
+    @field_validator("classification")
+    @classmethod
+    def validate_classification(cls, v: str) -> str:
+        """Validate that classification is not empty."""
+        if not v or not v.strip():
+            raise ValueError("classification cannot be empty")
+        return v
+
+    @field_validator("version_tokens")
+    @classmethod
+    def validate_version_tokens(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that version_tokens are sorted and unique."""
+        if not all(isinstance(t, str) for t in v):
+            raise ValueError("version_tokens must contain only strings")
+        # Check that all tokens are lowercase
+        if any(t != t.lower() for t in v):
+            raise ValueError("version_tokens must be lowercase")
+        # Check for duplicates
+        if len(set(v)) != len(v):
+            raise ValueError("version_tokens must be unique")
+        # Check sorted order
+        if list(v) != sorted(v):
+            raise ValueError("version_tokens must be sorted")
+        return v
+
+    @field_validator("unwanted_flags")
+    @classmethod
+    def validate_unwanted_flags(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that unwanted_flags are sorted and unique."""
+        if not all(isinstance(f, str) for f in v):
+            raise ValueError("unwanted_flags must contain only strings")
+        # Check that all flags are lowercase
+        if any(f != f.lower() for f in v):
+            raise ValueError("unwanted_flags must be lowercase")
+        # Check for duplicates
+        if len(set(v)) != len(v):
+            raise ValueError("unwanted_flags must be unique")
+        # Check sorted order
+        if list(v) != sorted(v):
+            raise ValueError("unwanted_flags must be sorted")
+        return v
+
+    @field_validator("artist_hints")
+    @classmethod
+    def validate_artist_hints(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        """Validate that artist_hints is not empty and tuple elements are strings."""
+        if not v:
+            raise ValueError("artist_hints cannot be empty")
+        if not all(isinstance(a, str) for a in v):
+            raise ValueError("artist_hints must contain only strings")
         return v
 
     def model_dump(self, **kwargs) -> dict:
