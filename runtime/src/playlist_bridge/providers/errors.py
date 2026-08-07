@@ -18,3 +18,25 @@ class ProviderError(Exception):
 
     def __str__(self) -> str:
         return f"[{self.service}] {self.operation}: {self.safe_message}"
+
+
+class AuthenticationRequired(ProviderError):
+    """Raised when authentication is required but missing or invalid.
+
+    This error indicates that the provider requires valid credentials
+    to perform the requested operation.
+    """
+
+    def __init__(self, service: str, operation: str, safe_message: str) -> None:
+        super().__init__(service, operation, safe_message)
+
+
+class PermissionDenied(ProviderError):
+    """Raised when the authenticated user lacks permission for an operation.
+
+    This error indicates that the provider rejected the request because
+    the authenticated user does not have the required permissions.
+    """
+
+    def __init__(self, service: str, operation: str, safe_message: str) -> None:
+        super().__init__(service, operation, safe_message)
