@@ -1,0 +1,1286 @@
+registry_version: 6
+rules:
+  unknown_fields: reject
+  datetimes: timezone-aware UTC
+  provider_payloads_cross_boundary: false
+  raw_credentials_in_arguments: false
+  pure_symbols_have_no_io: true
+  dispatch_contracts_must_equal_registry: true
+  every_registry_symbol_has_owning_dispatch: true
+  repeated_symbols_have_one_owner: true
+  signature_changes_require_supersedes: true
+  source_plan_step_set_equals_manifest: true
+  embedded_registry_equals_external_registry: true
+  test_only_dispatches_target_no_production_files: true
+  composition_root_builders_required_by_cli: true
+symbols:
+  credential_key_name:
+    file: runtime/src/playlist_bridge/credentials/store.py
+    signature: '(service: SourceService | DestinationService, profile_name: str) -> str'
+    errors:
+    - ValueError
+    side_effects: []
+  CredentialCorruptionError:
+    file: runtime/src/playlist_bridge/credentials/store.py
+    signature: 'CredentialCorruptionError(service: str, profile_name: str, safe_message: str)'
+    errors: []
+    side_effects: []
+  KeyringCacheHandler:
+    file: runtime/src/playlist_bridge/credentials/store.py
+    signature: 'KeyringCacheHandler(service: str, profile_name: str, store: CredentialStore)'
+    errors:
+    - CredentialCorruptionError
+    side_effects:
+    - os_keychain_read
+    - os_keychain_write
+    - os_keychain_delete
+  create_spotify_pkce_manager:
+    file: runtime/src/playlist_bridge/auth/spotify.py
+    signature: '(settings: SpotifyOAuthSettings, cache_handler: KeyringCacheHandler, open_browser: bool = True) -> SpotifyOAuth'
+    errors:
+    - ValueError
+    side_effects: []
+  authenticate_spotify_profile:
+    file: runtime/src/playlist_bridge/auth/spotify.py
+    signature: '(profile_name: str, settings: SpotifyOAuthSettings, profiles: AccountProfileRepository, credentials: CredentialStore, open_browser: bool = True) -> AccountProfile'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - InvalidProviderResponse
+    side_effects:
+    - official_oauth_browser
+    - os_keychain_write
+    - sqlite_profile_write
+  load_google_client_config:
+    file: runtime/src/playlist_bridge/auth/youtube.py
+    signature: '(client_secret_path: Path) -> GoogleOAuthSettings'
+    errors:
+    - ValueError
+    - FileNotFoundError
+    side_effects:
+    - filesystem_read
+  serialize_google_credentials:
+    file: runtime/src/playlist_bridge/auth/youtube.py
+    signature: '(credentials: Credentials) -> str'
+    errors:
+    - CredentialCorruptionError
+    side_effects: []
+  deserialize_google_credentials:
+    file: runtime/src/playlist_bridge/auth/youtube.py
+    signature: '(serialized: str, scopes: Sequence[str]) -> Credentials'
+    errors:
+    - CredentialCorruptionError
+    side_effects: []
+  authenticate_youtube_profile:
+    file: runtime/src/playlist_bridge/auth/youtube.py
+    signature: '(profile_name: str, settings: GoogleOAuthSettings, profiles: AccountProfileRepository, credentials: CredentialStore, open_browser: bool = True) -> AccountProfile'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - InvalidProviderResponse
+    side_effects:
+    - official_oauth_browser
+    - os_keychain_write
+    - sqlite_profile_write
+  refresh_google_credentials:
+    file: runtime/src/playlist_bridge/auth/youtube.py
+    signature: '(profile_name: str, credentials: CredentialStore, request: Request) -> Credentials'
+    errors:
+    - AuthenticationRequired
+    - TemporaryProviderFailure
+    - CredentialCorruptionError
+    side_effects:
+    - provider_network
+    - os_keychain_write
+  get_auth_status:
+    file: runtime/src/playlist_bridge/auth/status.py
+    signature: '(service: SourceService | DestinationService, profile_name: str, profiles: AccountProfileRepository, credentials: CredentialStore) -> AuthStatus'
+    errors:
+    - CredentialCorruptionError
+    side_effects:
+    - os_keychain_read
+    - sqlite_read
+  parse_youtube_playlist_id:
+    file: runtime/src/playlist_bridge/providers/youtube.py
+    signature: '(url: str) -> str'
+    errors:
+    - ValueError
+    side_effects: []
+  fetch_youtube_playlist_metadata:
+    file: runtime/src/playlist_bridge/providers/youtube.py
+    signature: '(client: YouTubeResource, playlist_id: str) -> SourcePlaylistMetadata'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    side_effects:
+    - provider_network
+  fetch_youtube_playlist_item_page:
+    file: runtime/src/playlist_bridge/providers/youtube.py
+    signature: '(client: YouTubeResource, playlist_id: str, page_token: str | None) -> YouTubePlaylistItemPage'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    side_effects:
+    - provider_network
+  iter_youtube_playlist_items:
+    file: runtime/src/playlist_bridge/providers/youtube.py
+    signature: '(client: YouTubeResource, playlist_id: str, cancel: CancellationToken) -> Iterator[YouTubePlaylistItem]'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+  unique_video_ids:
+    file: runtime/src/playlist_bridge/providers/youtube.py
+    signature: '(items: Sequence[YouTubePlaylistItem]) -> list[str]'
+    errors: []
+    side_effects: []
+  fetch_youtube_video_metadata:
+    file: runtime/src/playlist_bridge/providers/youtube.py
+    signature: '(client: YouTubeResource, video_ids: Sequence[str], cancel: CancellationToken) -> dict[str, YouTubeVideoMetadata]'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+  YouTubeSourceAdapter.load_playlist:
+    file: runtime/src/playlist_bridge/providers/youtube.py
+    signature: '(self, reference: PlaylistReference, *, cancel: CancellationToken) -> LoadedSourcePlaylist'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+  normalize_unicode_text:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: '(value: str) -> str'
+    errors: []
+    side_effects: []
+  comparison_text:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: '(value: str) -> str'
+    errors: []
+    side_effects: []
+  remove_bracketed_noise:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: '(value: str, removable_phrases: Collection[str] = REMOVABLE_NOISE_PHRASES) -> str'
+    errors: []
+    side_effects: []
+  extract_version_tokens:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: '(value: str) -> tuple[str, ...]'
+    errors: []
+    side_effects: []
+  detect_unwanted_version_flags:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: '(title: str, artist_hints: Sequence[str]) -> tuple[str, ...]'
+    errors: []
+    side_effects: []
+  classify_source_item:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: '(track: SourceTrack) -> str'
+    errors: []
+    side_effects: []
+  SpotifyOAuthSettings:
+    file: runtime/src/playlist_bridge/settings.py
+    signature: 'SpotifyOAuthSettings(client_id: str, redirect_uri: str, scopes: tuple[str, ...])'
+    errors:
+    - ValueError
+    side_effects: []
+  GoogleOAuthSettings:
+    file: runtime/src/playlist_bridge/settings.py
+    signature: 'GoogleOAuthSettings(client_secret_path: Path, scopes: tuple[str, ...], redirect_host: str, redirect_port: int)'
+    errors:
+    - ValueError
+    side_effects: []
+  SourceAdapter:
+    file: runtime/src/playlist_bridge/providers/youtube.py
+    signature: 'Protocol.load_playlist(reference: PlaylistReference, *, cancel: CancellationToken) -> LoadedSourcePlaylist'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+  map_youtube_error:
+    file: runtime/src/playlist_bridge/providers/youtube.py
+    signature: '(error: HttpError, operation: str) -> ProviderError'
+    errors: []
+    side_effects: []
+  REMOVABLE_NOISE_PHRASES:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: Final[frozenset[str]]
+    errors: []
+    side_effects: []
+  SpotifyAdapter:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: Protocol.search_tracks(...); create_playlist(...); add_items(...); replace_items(...); read_items(...)
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+    - destination_write
+  map_spotify_error:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(error: SpotifyException, operation: str) -> ProviderError'
+    errors: []
+    side_effects: []
+  AuthenticatedSpotifyAdapter:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: 'AuthenticatedSpotifyAdapter(client: Spotify)'
+    errors: []
+    side_effects: []
+  MATCH_POLICY_THRESHOLDS:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: Final[Mapping[MatchPolicy, PolicyThresholds]]
+    errors: []
+    side_effects: []
+  JsonlEventEmitter:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: 'JsonlEventEmitter(stream: TextIO)'
+    errors:
+    - OSError
+    side_effects:
+    - stream_write
+    - stream_flush
+  load_source_stage:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, request: TransferRequest, dependencies: RuntimeDependencies, emit: EventEmitter, cancel: CancellationToken, lease_token: str) -> LoadedSourcePlaylist'
+    errors:
+    - JobNotFoundError
+    - LeaseLostError
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - provider_network
+  match_one_stage:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, dependencies: RuntimeDependencies, emit: EventEmitter, cancel: CancellationToken, lease_token: str) -> MatchDecision | None'
+    errors:
+    - JobNotFoundError
+    - LeaseLostError
+    - AuthenticationRequired
+    - PermissionDenied
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - provider_network
+  run_match_loop:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, dependencies: RuntimeDependencies, emit: EventEmitter, cancel: CancellationToken, lease_token: str) -> list[MatchDecision]'
+    errors:
+    - JobNotFoundError
+    - LeaseLostError
+    - AuthenticationRequired
+    - PermissionDenied
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - provider_network
+  complete_dry_run:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, request: TransferRequest, dependencies: RuntimeDependencies, emit: EventEmitter, lease_token: str) -> TransferResult'
+    errors:
+    - JobNotFoundError
+    - LeaseLostError
+    - OSError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - filesystem_write
+  resolve_destination:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(request: TransferRequest, adapter: SpotifyAdapter, cancel: CancellationToken) -> DestinationPlaylist'
+    errors:
+    - ValueError
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+    - destination_create
+  DestinationWritePlan:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: 'DestinationWritePlan(playlist_id: str, mode: TransferMode, ordered_uris: tuple[str, ...], batches: tuple[WriteBatch, ...])'
+    errors:
+    - ValueError
+    side_effects: []
+  reconcile_pending_batch:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(plan: DestinationWritePlan, batch_index: int, adapter: SpotifyAdapter, cancel: CancellationToken) -> ReconciliationResult'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+  execute_write_plan:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, plan: DestinationWritePlan, dependencies: RuntimeDependencies, emit: EventEmitter, cancel: CancellationToken, lease_token: str) -> DestinationPlaylist'
+    errors:
+    - LeaseLostError
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - provider_network
+    - destination_write
+  CancellationController:
+    file: runtime/src/playlist_bridge/jobs/cancellation.py
+    signature: CancellationController()
+    errors:
+    - CancellationRequested
+    side_effects:
+    - in_memory_state
+  install_signal_handlers:
+    file: runtime/src/playlist_bridge/jobs/cancellation.py
+    signature: '(controller: CancellationController) -> Callable[[], None]'
+    errors: []
+    side_effects:
+    - process_signal_handler_install
+  handle_job_failure:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, error: Exception, dependencies: RuntimeDependencies, emit: EventEmitter, lease_token: str | None) -> TransferResult'
+    errors:
+    - LeaseLostError
+    - OSError
+    side_effects:
+    - sqlite_write
+    - filesystem_write
+    - stream_write
+  ExitCode:
+    file: runtime/src/playlist_bridge/cli.py
+    signature: IntEnum(success=0, validation=2, auth=3, provider=4, review_required=5, busy=6, cancelled=130, internal=70)
+    errors: []
+    side_effects: []
+  configure_output_streams:
+    file: runtime/src/playlist_bridge/cli.py
+    signature: '(machine_readable: bool) -> OutputStreams'
+    errors: []
+    side_effects:
+    - process_stream_configuration
+  normalize_source_track:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: '(track: SourceTrack) -> NormalizedTrackHint'
+    errors:
+    - ValueError
+    side_effects: []
+  source_fingerprint:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: '(hint: NormalizedTrackHint) -> str'
+    errors: []
+    side_effects: []
+  build_spotify_queries:
+    file: runtime/src/playlist_bridge/matching/normalize.py
+    signature: '(hint: NormalizedTrackHint, config: MatchingConfig) -> list[str]'
+    errors: []
+    side_effects: []
+  search_spotify_query:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(client: Spotify, query: str, market: str | None, limit: int) -> list[SpotifyCandidate]'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    side_effects:
+    - provider_network
+  search_spotify_candidates:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(adapter: SpotifyAdapter, queries: Sequence[str], market: str | None, config: MatchingConfig, cancel: CancellationToken) -> list[SpotifyCandidate]'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+  get_spotify_identity:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(client: Spotify) -> ProviderIdentity'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    side_effects:
+    - provider_network
+  list_owned_spotify_playlists:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(client: Spotify, owner_id: str, cancel: CancellationToken) -> list[DestinationPlaylist]'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+  find_owned_playlist_by_name:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(playlists: Sequence[DestinationPlaylist], owner_id: str, name: str) -> DestinationPlaylist | None'
+    errors: []
+    side_effects: []
+  create_spotify_playlist:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(client: Spotify, owner_id: str, name: str, description: str, public: bool) -> DestinationPlaylist'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    side_effects:
+    - provider_network
+    - destination_create
+  chunk_uris:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(uris: Sequence[str], batch_size: int) -> list[tuple[str, ...]]'
+    errors:
+    - ValueError
+    side_effects: []
+  add_uri_batch:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(client: Spotify, playlist_id: str, uris: Sequence[str]) -> str'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    side_effects:
+    - provider_network
+    - destination_write
+  add_all_uri_batches:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(adapter: SpotifyAdapter, playlist_id: str, uris: Sequence[str], batch_size: int, cancel: CancellationToken) -> list[str]'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+    - destination_write
+  read_spotify_playlist_items:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(client: Spotify, playlist_id: str, cancel: CancellationToken) -> list[str | None]'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+  replace_playlist_items:
+    file: runtime/src/playlist_bridge/providers/spotify.py
+    signature: '(adapter: SpotifyAdapter, playlist_id: str, uris: Sequence[str], batch_size: int, cancel: CancellationToken) -> list[str]'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+    - destination_write
+  matching_config_v1:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: () -> MatchingConfig
+    errors: []
+    side_effects: []
+  title_similarity:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: '(hint: NormalizedTrackHint, candidate_title: str) -> float'
+    errors: []
+    side_effects: []
+  artist_similarity:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: '(artist_hints: Sequence[str], candidate_artists: Sequence[str]) -> float'
+    errors: []
+    side_effects: []
+  version_agreement_score:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: '(source_tokens: Sequence[str], candidate_title: str) -> tuple[float, tuple[str, ...]]'
+    errors: []
+    side_effects: []
+  unwanted_version_penalty:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: '(source_flags: Sequence[str], candidate_title: str, candidate_artists: Sequence[str], config: MatchingConfig) -> tuple[float, tuple[str, ...]]'
+    errors: []
+    side_effects: []
+  explicit_state_score:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: '(source_evidence: bool | None, candidate_explicit: bool, config: MatchingConfig) -> tuple[float, tuple[str, ...]]'
+    errors: []
+    side_effects: []
+  score_candidate:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: '(hint: NormalizedTrackHint, candidate: SpotifyCandidate, config: MatchingConfig) -> MatchScore'
+    errors: []
+    side_effects: []
+  rank_candidates:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: '(hint: NormalizedTrackHint, candidates: Sequence[SpotifyCandidate], config: MatchingConfig, alternative_limit: int) -> list[tuple[SpotifyCandidate, MatchScore]]'
+    errors:
+    - ValueError
+    side_effects: []
+  decide_match:
+    file: runtime/src/playlist_bridge/matching/scoring.py
+    signature: '(source_item_id: str, ranked: Sequence[tuple[SpotifyCandidate, MatchScore]], policy: MatchPolicy, config: MatchingConfig) -> MatchDecision'
+    errors: []
+    side_effects: []
+  resolve_manual_correction:
+    file: runtime/src/playlist_bridge/matching/matcher.py
+    signature: '(fingerprint: str, corrections: ManualCorrectionRepository) -> ManualResolution | None'
+    errors: []
+    side_effects:
+    - sqlite_read
+  resolve_cached_match:
+    file: runtime/src/playlist_bridge/matching/matcher.py
+    signature: '(fingerprint: str, policy: MatchPolicy, now: datetime, config: MatchingConfig, cache: MatchCacheRepository) -> CachedResolution | None'
+    errors: []
+    side_effects:
+    - sqlite_read
+  match_source_track:
+    file: runtime/src/playlist_bridge/matching/matcher.py
+    signature: '(track: SourceTrack, policy: MatchPolicy, market: str | None, dependencies: MatcherDependencies, cancel: CancellationToken) -> MatchDecision'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - provider_network
+  cache_accepted_match:
+    file: runtime/src/playlist_bridge/matching/matcher.py
+    signature: '(fingerprint: str, decision: MatchDecision, now: datetime, cache: MatchCacheRepository) -> None'
+    errors: []
+    side_effects:
+    - sqlite_write
+  apply_manual_review:
+    file: runtime/src/playlist_bridge/matching/matcher.py
+    signature: '(job_id: str, source_item_id: str, action: ReviewAction, spotify_id: str | None, repositories: ReviewRepositories) -> MatchDecision'
+    errors:
+    - ValueError
+    - JobNotFoundError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  new_job_id:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: () -> str
+    errors: []
+    side_effects:
+    - secure_random
+  create_transfer_job:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(request: TransferRequest, jobs: JobRepository, now: datetime) -> str'
+    errors: []
+    side_effects:
+    - sqlite_write
+  calculate_transfer_counts:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(tracks: Sequence[SourceTrack], decisions: Sequence[MatchDecision]) -> TransferCounts'
+    errors: []
+    side_effects: []
+  accepted_uris_in_source_order:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(tracks: Sequence[SourceTrack], decisions: Sequence[MatchDecision]) -> list[str]'
+    errors:
+    - ValueError
+    side_effects: []
+  write_batch_key:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, playlist_id: str, batch_index: int, uris: Sequence[str]) -> str'
+    errors: []
+    side_effects: []
+  save_write_checkpoint:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, plan: DestinationWritePlan, batch_index: int, snapshot_id: str | None, lease_token: str, repositories: RunnerRepositories) -> None'
+    errors:
+    - LeaseLostError
+    side_effects:
+    - sqlite_write
+  compare_destination_items:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(expected: Sequence[str], actual: Sequence[str | None]) -> VerificationResult'
+    errors: []
+    side_effects: []
+  verify_destination:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(playlist_id: str, expected: Sequence[str], adapter: SpotifyAdapter, cancel: CancellationToken) -> VerificationResult'
+    errors:
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    side_effects:
+    - provider_network
+  write_json_report:
+    file: runtime/src/playlist_bridge/jobs/reports.py
+    signature: '(result: TransferResult, destination: DestinationPlaylist | None, verification: VerificationResult | None, report_path: Path) -> Path'
+    errors:
+    - OSError
+    side_effects:
+    - filesystem_write
+  write_review_csv:
+    file: runtime/src/playlist_bridge/jobs/reports.py
+    signature: '(rows: Sequence[ReviewReportRow], report_path: Path) -> Path'
+    errors:
+    - OSError
+    side_effects:
+    - filesystem_write
+  RuntimeDependencies:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: 'RuntimeDependencies(jobs: JobRepository, tracks: SourceTrackRepository, decisions: MatchDecisionRepository, match_cache: MatchCacheRepository, corrections: ManualCorrectionRepository, source: SourceAdapter, spotify: SpotifyAdapter, matching_config:
+      MatchingConfig, clock: Clock, lease_owner_id: str, report_path_factory: ReportPathFactory)'
+    errors:
+    - ValueError
+    side_effects: []
+  run_transfer:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(request: TransferRequest, *, dependencies: RuntimeDependencies, emit: EventEmitter, cancel: CancellationToken) -> TransferResult'
+    errors:
+    - JobBusyError
+    - LeaseLostError
+    - AuthenticationRequired
+    - PermissionDenied
+    - ProviderNotFound
+    - RateLimited
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - CancellationRequested
+    - OSError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - provider_network
+    - destination_write
+    - filesystem_write
+  resume_transfer:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, *, allow_failed: bool, allow_cancelled: bool, dependencies: RuntimeDependencies, emit: EventEmitter, cancel: CancellationToken) -> TransferResult'
+    errors:
+    - JobNotFoundError
+    - JobBusyError
+    - LeaseLostError
+    - CancellationRequested
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - provider_network
+    - destination_write
+    - filesystem_write
+  rerun_unresolved_reviews:
+    file: runtime/src/playlist_bridge/jobs/runner.py
+    signature: '(job_id: str, *, dependencies: RuntimeDependencies, emit: EventEmitter, cancel: CancellationToken) -> TransferResult'
+    errors:
+    - JobNotFoundError
+    - JobBusyError
+    - LeaseLostError
+    - CancellationRequested
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - provider_network
+    - destination_write
+    - filesystem_write
+  locatePlaylistBridgeExecutable:
+    file: extension/process.ts
+    signature: '(configuredPath?: string) => Promise<string>'
+    errors:
+    - ExecutableNotFoundError
+    side_effects:
+    - filesystem_read
+  buildCliInvocation:
+    file: extension/process.ts
+    signature: '(input: TypedToolInput) => CliInvocation'
+    errors:
+    - InputValidationError
+    side_effects: []
+  runCliProcess:
+    file: extension/process.ts
+    signature: '(invocation: CliInvocation, signal: AbortSignal, onEvent: (event: PlaylistBridgeEvent) => void) => Promise<ProcessResult>'
+    errors:
+    - ProcessSpawnError
+    - ProcessProtocolError
+    side_effects:
+    - child_process_spawn
+    - filesystem_report_write
+  JsonlEventParser:
+    file: extension/jsonl.ts
+    signature: 'JsonlEventParser(onEvent: (event: PlaylistBridgeEvent) => void)'
+    errors:
+    - ProcessProtocolError
+    side_effects: []
+  BoundedProcessOutput:
+    file: extension/process.ts
+    signature: 'BoundedProcessOutput(maxBytes: number, reportPath: string)'
+    errors:
+    - OSError
+    side_effects:
+    - filesystem_report_write
+  confirmDestructiveTransfer:
+    file: extension/index.ts
+    signature: '(input: PlaylistTransferInput, context: ToolContext) => Promise<boolean>'
+    errors: []
+    side_effects:
+    - user_confirmation_ui
+  renderToolCall:
+    file: extension/render.ts
+    signature: '(name: PlaylistToolName, input: unknown) => Renderable'
+    errors: []
+    side_effects: []
+  renderToolResult:
+    file: extension/render.ts
+    signature: '(name: PlaylistToolName, result: unknown) => Renderable'
+    errors: []
+    side_effects: []
+  PolicyThresholds:
+    file: runtime/src/playlist_bridge/domain/models.py
+    signature: 'PolicyThresholds(auto_accept_score: float, minimum_runner_up_gap: float, review_floor: float)'
+    errors:
+    - ValueError
+    side_effects: []
+  MatchingConfig:
+    file: runtime/src/playlist_bridge/domain/models.py
+    signature: 'MatchingConfig(schema_version: Literal[1], title_weight: float, artist_weight: float, duration_weight: float, version_weight: float, explicit_weight: float, unwanted_version_penalty: float, version_contradiction_penalty: float, explicit_mismatch_penalty:
+      float, duration_full_credit_floor_ms: int, duration_full_credit_ratio: float, duration_zero_credit_floor_ms: int, duration_zero_credit_ratio: float, max_queries_per_track: int, results_per_query: int, max_unique_candidates: int, cache_freshness_days: int,
+      policy_thresholds: dict[MatchPolicy, PolicyThresholds])'
+    errors:
+    - ValueError
+    side_effects: []
+  AuthStatus:
+    file: runtime/src/playlist_bridge/auth/status.py
+    signature: 'AuthStatus(service: SourceService | DestinationService, profile_name: str, state: Literal["authenticated", "missing", "expired_refreshable", "invalid"], provider_user_id: str | None, display_name: str | None, safe_message: str | None)'
+    errors:
+    - ValueError
+    side_effects: []
+  probe_spotify_auth_status:
+    file: runtime/src/playlist_bridge/auth/status.py
+    signature: '(profile_name: str, profiles: AccountProfileRepository, credentials: CredentialStore) -> AuthStatus'
+    errors:
+    - CredentialCorruptionError
+    side_effects:
+    - os_keychain_read
+    - sqlite_read
+  probe_youtube_auth_status:
+    file: runtime/src/playlist_bridge/auth/status.py
+    signature: '(profile_name: str, profiles: AccountProfileRepository, credentials: CredentialStore) -> AuthStatus'
+    errors:
+    - CredentialCorruptionError
+    side_effects:
+    - os_keychain_read
+    - sqlite_read
+  get_requested_auth_statuses:
+    file: runtime/src/playlist_bridge/auth/status.py
+    signature: '(requests: Sequence[tuple[SourceService | DestinationService, str]], profiles: AccountProfileRepository, credentials: CredentialStore) -> list[AuthStatus]'
+    errors:
+    - CredentialCorruptionError
+    side_effects:
+    - os_keychain_read
+    - sqlite_read
+  update_job_checkpoint:
+    file: runtime/src/playlist_bridge/persistence/repositories.py
+    signature: '(session: Session, job_id: str, checkpoint_fields: Mapping[str, Any], updated_at: datetime, *, lease: JobLease) -> JobRecord'
+    errors:
+    - JobNotFoundError
+    - LeaseLostError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  CredentialStore:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'Protocol.save(service: SourceService | DestinationService, profile_name: str, token_payload: Mapping[str, Any]) -> None; load(service: SourceService | DestinationService, profile_name: str) -> dict[str, Any] | None; delete(service: SourceService
+      | DestinationService, profile_name: str) -> bool'
+    errors:
+    - CredentialCorruptionError
+    - KeyringError
+    side_effects:
+    - os_keychain_read
+    - os_keychain_write
+    - os_keychain_delete
+  AccountProfileRepository:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'Protocol.save(profile: AccountProfile) -> AccountProfile; get(service: SourceService | DestinationService, profile_name: str) -> AccountProfile | None; list(service: SourceService | DestinationService | None = None) -> list[AccountProfile]'
+    errors:
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  JobRepository:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'Protocol.create(request: TransferRequest, job_id: str, created_at: datetime) -> JobRecord; get(job_id: str) -> JobRecord | None; update_state(job_id: str, status: JobStatus, updated_at: datetime) -> JobRecord; update_checkpoint(job_id: str, checkpoint_fields:
+      Mapping[str, Any], updated_at: datetime, *, lease: JobLease) -> JobRecord; record_error(job_id: str, safe_code: str, safe_message: str, updated_at: datetime) -> JobRecord; list_recent(limit: int = 20) -> list[JobRecord]; acquire_lease(job_id: str, owner_id:
+      str, now: datetime, lease_duration: timedelta, current_token: str | None = None) -> JobLease; heartbeat_lease(lease: JobLease, now: datetime, lease_duration: timedelta) -> JobLease; release_lease(lease: JobLease, now: datetime) -> bool'
+    errors:
+    - JobNotFoundError
+    - JobLeaseBusyError
+    - LeaseLostError
+    - IntegrityError
+    - ValueError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - secure_random_token_generation
+  SourceTrackRepository:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'Protocol.replace_for_job(job_id: str, tracks: Sequence[SourceTrack]) -> int; list_ordered(job_id: str) -> list[SourceTrack]; get(job_id: str, source_item_id: str) -> SourceTrack | None'
+    errors:
+    - JobNotFoundError
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  MatchDecisionRepository:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'Protocol.upsert(job_id: str, decision: MatchDecision) -> MatchDecision; unresolved(job_id: str) -> list[MatchDecision]'
+    errors:
+    - JobNotFoundError
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  MatchCacheRepository:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'Protocol.get(fingerprint: str) -> MatchCacheEntry | None; upsert(entry: MatchCacheEntry) -> MatchCacheEntry'
+    errors:
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  ManualCorrectionRepository:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'Protocol.get(fingerprint: str) -> ManualCorrection | None; upsert(correction: ManualCorrection) -> ManualCorrection'
+    errors:
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  Clock:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: Callable[[], datetime]
+    errors: []
+    side_effects: []
+  ReportPathFactory:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: Callable[[str, str], Path]
+    errors: []
+    side_effects: []
+  RunnerRepositories:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'RunnerRepositories(jobs: JobRepository, tracks: SourceTrackRepository, decisions: MatchDecisionRepository)'
+    errors:
+    - ValueError
+    side_effects: []
+  ReviewRepositories:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'ReviewRepositories(jobs: JobRepository, tracks: SourceTrackRepository, decisions: MatchDecisionRepository, corrections: ManualCorrectionRepository)'
+    errors:
+    - ValueError
+    side_effects: []
+  MatcherDependencies:
+    file: runtime/src/playlist_bridge/ports.py
+    signature: 'MatcherDependencies(spotify: SpotifyAdapter, decisions: MatchDecisionRepository, match_cache: MatchCacheRepository, corrections: ManualCorrectionRepository, matching_config: MatchingConfig, clock: Clock)'
+    errors:
+    - ValueError
+    side_effects: []
+  KeyringCredentialStore:
+    file: runtime/src/playlist_bridge/credentials/store.py
+    signature: 'KeyringCredentialStore(backend: KeyringBackend)'
+    errors:
+    - KeyringError
+    - CredentialCorruptionError
+    side_effects:
+    - os_keychain_read
+    - os_keychain_write
+    - os_keychain_delete
+  SqlAlchemyAccountProfileRepository:
+    file: runtime/src/playlist_bridge/persistence/repositories.py
+    signature: 'SqlAlchemyAccountProfileRepository(session_factory: sessionmaker[Session])'
+    errors:
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  SqlAlchemyJobRepository:
+    file: runtime/src/playlist_bridge/persistence/repositories.py
+    signature: 'SqlAlchemyJobRepository(session_factory: sessionmaker[Session])'
+    errors:
+    - JobNotFoundError
+    - JobLeaseBusyError
+    - LeaseLostError
+    - IntegrityError
+    - ValueError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+    - secure_random_token_generation
+  SqlAlchemySourceTrackRepository:
+    file: runtime/src/playlist_bridge/persistence/repositories.py
+    signature: 'SqlAlchemySourceTrackRepository(session_factory: sessionmaker[Session])'
+    errors:
+    - JobNotFoundError
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  SqlAlchemyMatchDecisionRepository:
+    file: runtime/src/playlist_bridge/persistence/repositories.py
+    signature: 'SqlAlchemyMatchDecisionRepository(session_factory: sessionmaker[Session])'
+    errors:
+    - JobNotFoundError
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  SqlAlchemyMatchCacheRepository:
+    file: runtime/src/playlist_bridge/persistence/repositories.py
+    signature: 'SqlAlchemyMatchCacheRepository(session_factory: sessionmaker[Session])'
+    errors:
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  SqlAlchemyManualCorrectionRepository:
+    file: runtime/src/playlist_bridge/persistence/repositories.py
+    signature: 'SqlAlchemyManualCorrectionRepository(session_factory: sessionmaker[Session])'
+    errors:
+    - IntegrityError
+    side_effects:
+    - sqlite_read
+    - sqlite_write
+  ApplicationState:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: 'ApplicationState(engine: Engine, session_factory: sessionmaker[Session], credentials: CredentialStore, profiles: AccountProfileRepository, jobs: JobRepository, tracks: SourceTrackRepository, decisions: MatchDecisionRepository, match_cache: MatchCacheRepository,
+      corrections: ManualCorrectionRepository)'
+    errors:
+    - ValueError
+    side_effects: []
+  initialize_application_state:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: '(*, database_file: Path | None = None, keyring_backend: KeyringBackend | None = None) -> ApplicationState'
+    errors:
+    - OSError
+    - SQLAlchemyError
+    - MigrationError
+    - KeyringError
+    side_effects:
+    - filesystem_directory_create
+    - sqlite_open
+    - sqlite_migration
+    - database_backup
+  AuthDependencies:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: 'AuthDependencies(profiles: AccountProfileRepository, credentials: CredentialStore)'
+    errors:
+    - ValueError
+    side_effects: []
+  build_auth_dependencies:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: '(state: ApplicationState | None = None) -> AuthDependencies'
+    errors:
+    - OSError
+    - SQLAlchemyError
+    - MigrationError
+    - KeyringError
+    side_effects:
+    - filesystem_directory_create
+    - sqlite_open
+    - sqlite_migration
+  SourceDependencies:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: 'SourceDependencies(source: SourceAdapter, profiles: AccountProfileRepository, credentials: CredentialStore)'
+    errors:
+    - ValueError
+    side_effects: []
+  build_source_dependencies:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: '(source_profile: str, *, state: ApplicationState | None = None) -> SourceDependencies'
+    errors:
+    - AuthenticationRequired
+    - CredentialCorruptionError
+    - InvalidProviderResponse
+    - OSError
+    - SQLAlchemyError
+    - MigrationError
+    side_effects:
+    - filesystem_directory_create
+    - sqlite_open
+    - sqlite_migration
+    - sqlite_read
+    - os_keychain_read
+    - provider_network
+  build_runtime_dependencies:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: '(source_profile: str, spotify_profile: str, *, state: ApplicationState | None = None, market: str | None = None) -> RuntimeDependencies'
+    errors:
+    - AuthenticationRequired
+    - CredentialCorruptionError
+    - PermissionDenied
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - OSError
+    - SQLAlchemyError
+    - MigrationError
+    side_effects:
+    - filesystem_directory_create
+    - sqlite_open
+    - sqlite_migration
+    - sqlite_read
+    - os_keychain_read
+    - os_keychain_write
+    - provider_network
+    - secure_random
+  build_runtime_dependencies_for_job:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: '(job_id: str, *, state: ApplicationState | None = None, market: str | None = None) -> RuntimeDependencies'
+    errors:
+    - JobNotFoundError
+    - AuthenticationRequired
+    - CredentialCorruptionError
+    - PermissionDenied
+    - InvalidProviderResponse
+    - TemporaryProviderFailure
+    - OSError
+    - SQLAlchemyError
+    - MigrationError
+    side_effects:
+    - filesystem_directory_create
+    - sqlite_open
+    - sqlite_migration
+    - sqlite_read
+    - os_keychain_read
+    - os_keychain_write
+    - provider_network
+    - secure_random
+  PlaylistToolName:
+    file: extension/types.ts
+    signature: type PlaylistToolName = "playlist_auth" | "playlist_transfer" | "playlist_review"
+    errors: []
+    side_effects: []
+  PlaylistAuthInput:
+    file: extension/types.ts
+    signature: 'type PlaylistAuthInput = { action: "login" | "status" | "logout"; service: "youtube" | "spotify"; profile: string; clientSecretPath?: string }'
+    errors: []
+    side_effects: []
+  PlaylistTransferInput:
+    file: extension/types.ts
+    signature: 'type PlaylistTransferInput = { sourceUrl: string; sourceProfile: string; spotifyProfile: string; destinationName?: string; mode?: "dry_run" | "create" | "merge" | "replace"; policy?: "strict" | "balanced" | "loose"; visibility?: "private" | "public";
+      jobId?: string }'
+    errors: []
+    side_effects: []
+  PlaylistReviewListInput:
+    file: extension/types.ts
+    signature: 'type PlaylistReviewListInput = { action: "list"; jobId: string }'
+    errors: []
+    side_effects: []
+  PlaylistReviewApplyInput:
+    file: extension/types.ts
+    signature: 'type PlaylistReviewApplyInput = { action: "apply"; jobId: string; sourceItemId: string; spotifyTrackId?: string; skip?: boolean }'
+    errors: []
+    side_effects: []
+  PlaylistReviewInput:
+    file: extension/types.ts
+    signature: type PlaylistReviewInput = PlaylistReviewListInput | PlaylistReviewApplyInput
+    errors: []
+    side_effects: []
+  TypedToolInput:
+    file: extension/types.ts
+    signature: type TypedToolInput = PlaylistAuthInput | PlaylistTransferInput | PlaylistReviewInput
+    errors: []
+    side_effects: []
+  PlaylistBridgeEvent:
+    file: extension/types.ts
+    signature: 'type PlaylistBridgeEvent = { schemaVersion: 1; type: string; jobId?: string; payload: Record<string, unknown> }'
+    errors: []
+    side_effects: []
+  PlaylistAuthResult:
+    file: extension/types.ts
+    signature: 'type PlaylistAuthResult = { service: "youtube" | "spotify"; profile: string; state: string; safeMessage?: string }'
+    errors: []
+    side_effects: []
+  PlaylistTransferResult:
+    file: extension/types.ts
+    signature: 'type PlaylistTransferResult = { jobId: string; status: string; counts: Record<string, number>; destinationId?: string; reportPaths: string[] }'
+    errors: []
+    side_effects: []
+  PlaylistReviewResult:
+    file: extension/types.ts
+    signature: 'type PlaylistReviewResult = { jobId: string; unresolved: unknown[]; applied?: boolean }'
+    errors: []
+    side_effects: []
+  CliInvocation:
+    file: extension/types.ts
+    signature: 'type CliInvocation = { executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }'
+    errors: []
+    side_effects: []
+  ProcessResult:
+    file: extension/types.ts
+    signature: 'type ProcessResult = { exitCode: number; events: PlaylistBridgeEvent[]; stderrReportPath?: string }'
+    errors: []
+    side_effects: []
+  ExtensionDependencies:
+    file: extension/types.ts
+    signature: 'type ExtensionDependencies = { buildInvocation: (input: TypedToolInput) => Promise<CliInvocation> | CliInvocation; runProcess: (invocation: CliInvocation, signal: AbortSignal, onEvent: (event: PlaylistBridgeEvent) => void) => Promise<ProcessResult>
+      }'
+    errors: []
+    side_effects: []
+  TransferRequest:
+    file: runtime/src/playlist_bridge/domain/models.py
+    signature: 'TransferRequest(source_url: str, source_profile: str, spotify_profile: str, destination_name: str, mode: TransferMode = TransferMode.dry_run, match_policy: MatchPolicy = MatchPolicy.balanced, public: bool = False)'
+    errors:
+    - ValueError
+    side_effects: []
+  JobQueryDependencies:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: 'JobQueryDependencies(jobs: JobRepository)'
+    errors:
+    - ValueError
+    side_effects: []
+  build_job_query_dependencies:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: '(state: ApplicationState | None = None) -> JobQueryDependencies'
+    errors:
+    - OSError
+    - SQLAlchemyError
+    - MigrationError
+    - KeyringError
+    side_effects:
+    - filesystem_directory_create
+    - sqlite_open
+    - sqlite_migration
+  build_review_dependencies:
+    file: runtime/src/playlist_bridge/bootstrap.py
+    signature: '(state: ApplicationState | None = None) -> ReviewRepositories'
+    errors:
+    - OSError
+    - SQLAlchemyError
+    - MigrationError
+    - KeyringError
+    side_effects:
+    - filesystem_directory_create
+    - sqlite_open
+    - sqlite_migration
+  jobs_list:
+    file: runtime/src/playlist_bridge/cli.py
+    signature: '(limit: int = 20, output: OutputMode = OutputMode.human) -> None'
+    errors:
+    - ValueError
+    - OSError
+    - SQLAlchemyError
+    - MigrationError
+    side_effects:
+    - filesystem_directory_create
+    - sqlite_open
+    - sqlite_migration
+    - sqlite_read
+    - stdout_write
+    - stderr_write
+  load_job_for_cli:
+    file: runtime/src/playlist_bridge/cli.py
+    signature: '(job_id: str, dependencies: JobQueryDependencies) -> JobRecord'
+    errors:
+    - JobNotFoundError
+    side_effects:
+    - sqlite_read
+  load_unresolved_review_decisions:
+    file: runtime/src/playlist_bridge/cli.py
+    signature: '(job_id: str, repositories: ReviewRepositories) -> list[MatchDecision]'
+    errors:
+    - JobNotFoundError
+    side_effects:
+    - sqlite_read
+  apply_manual_review_correction:
+    file: runtime/src/playlist_bridge/cli.py
+    signature: '(job_id: str, source_item_id: str, spotify_track_id: str | None, skip: bool, repositories: ReviewRepositories) -> MatchDecision'
+    errors:
+    - ValueError
+    - JobNotFoundError
+    side_effects:
+    - sqlite_read
+    - sqlite_write

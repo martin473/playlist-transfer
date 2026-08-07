@@ -1,0 +1,34 @@
+# Validation Summary
+
+```json
+{
+  "status": "PASS",
+  "dispatches": 597,
+  "microsteps": 758,
+  "waves": 241,
+  "all_prerequisites_earlier": true,
+  "all_steps_once": true,
+  "source_plan_step_set_match": "PASS",
+  "embedded_registry_sync": "PASS",
+  "parallel_batch_target_conflicts": 0,
+  "registry_symbol_coverage": "PASS",
+  "registry_owner_mapping": "PASS",
+  "registry_contract_equality": "PASS",
+  "duplicate_symbol_owner_conflicts": 0,
+  "signature_supersedes_validation": "PASS",
+  "unauthorized_signature_changes": 0,
+  "test_only_target_containment": "PASS",
+  "composition_root_scheduled": "PASS",
+  "job_review_composition_root": "PASS",
+  "typescript_boundary_types_scheduled": "PASS",
+  "transfer_request_fields_frozen": "PASS",
+  "typescript_typebox_alignment": "PASS",
+  "review_fingerprint_access": "PASS",
+  "implementation_freeze": "PASS",
+  "pi_smoke_execution_scheduled": "PASS",
+  "full_verification_execution_scheduled": "PASS",
+  "failfast_mutation_suite_scheduled": "PASS",
+  "packed_extension_smoke_scheduled": "PASS",
+  "clean_room_capability_simulation": "PASS"
+}
+```
