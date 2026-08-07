@@ -1,7 +1,7 @@
 """Unit tests for domain enums."""
 
 import pytest
-from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService, TrackStatus
+from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService, TrackStatus, TransferMode
 
 
 class TestSourceService:
@@ -122,6 +122,29 @@ class TestJobStatus:
         assert JobStatus("completed") == JobStatus.COMPLETED
         assert JobStatus("failed") == JobStatus.FAILED
         assert JobStatus("cancelled") == JobStatus.CANCELLED
+
+
+class TestTransferMode:
+    """Tests for TransferMode enum."""
+
+    def test_transfer_mode_values(self) -> None:
+        """Test that all TransferMode values are defined correctly."""
+        assert TransferMode.DRY_RUN == "dry_run"
+        assert TransferMode.CREATE == "create"
+        assert TransferMode.MERGE == "merge"
+        assert TransferMode.REPLACE == "replace"
+
+    def test_transfer_mode_parses_valid_values(self) -> None:
+        """Test that TransferMode parses valid values."""
+        assert TransferMode("dry_run") == TransferMode.DRY_RUN
+        assert TransferMode("create") == TransferMode.CREATE
+        assert TransferMode("merge") == TransferMode.MERGE
+        assert TransferMode("replace") == TransferMode.REPLACE
+
+    def test_transfer_mode_rejects_invalid_value(self) -> None:
+        """Test that TransferMode rejects invalid values."""
+        with pytest.raises(ValueError):
+            TransferMode("invalid")
 
 
 class TestTrackStatus:
