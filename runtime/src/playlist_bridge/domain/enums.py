@@ -45,3 +45,33 @@ class JobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class MatchPolicy(str, Enum):
+    """Match policy controlling how aggressively matches are accepted.
+
+    Values:
+        STRICT: Only accept high-confidence matches.
+        BALANCED: Balance precision and recall.
+        LOOSE: Accept lower-confidence matches to maximize coverage.
+    """
+
+    STRICT = "strict"
+    BALANCED = "balanced"
+    LOOSE = "loose"
+
+
+class TransferMode(str, Enum):
+    """Transfer mode controlling destination playlist mutation.
+
+    Values:
+        DRY_RUN: Simulate transfer without writing changes.
+        CREATE: Create a new destination playlist.
+        MERGE: Merge tracks into an existing playlist.
+        REPLACE: Replace the entire destination playlist contents.
+    """
+
+    DRY_RUN = "dry_run"
+    CREATE = "create"
+    MERGE = "merge"
+    REPLACE = "replace"
