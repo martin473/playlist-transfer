@@ -40,3 +40,25 @@ class PermissionDenied(ProviderError):
 
     def __init__(self, service: str, operation: str, safe_message: str) -> None:
         super().__init__(service, operation, safe_message)
+
+
+class ProviderNotFound(ProviderError):
+    """Raised when a requested resource is not found.
+
+    This error indicates that the provider could not locate the
+    requested resource (e.g., playlist, track, or video).
+    """
+
+    def __init__(self, service: str, operation: str, safe_message: str) -> None:
+        super().__init__(service, operation, safe_message)
+
+
+class RateLimited(ProviderError):
+    """Raised when a provider rate limit is exceeded.
+
+    This error indicates that the provider has rejected the request
+    because the application has exceeded the allowed rate of requests.
+    """
+
+    def __init__(self, service: str, operation: str, safe_message: str) -> None:
+        super().__init__(service, operation, safe_message)
