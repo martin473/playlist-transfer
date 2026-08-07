@@ -80,6 +80,101 @@ class SpotifyCandidate(BaseModel):
         return super().model_dump(**kwargs)
 
 
+class SourceTrack(BaseModel):
+    """A track from a source playlist (e.g., YouTube).
+
+    This model represents a single item in a source playlist, with position
+    and metadata, without exposing provider-specific details or credentials.
+
+    Attributes:
+        position: Position in the playlist (0-indexed, strictly ascending).
+        title: Track title.
+        artist_names: List of artist or channel names.
+        duration_seconds: Track duration in seconds.
+        video_id: Source video ID (e.g., YouTube video ID).
+        channel_title: Optional channel title of the uploader.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    position: int = Field(description="Position in the playlist (0-indexed)", ge=0)
+    title: str = Field(description="Track title")
+    artist_names: list[str] = Field(description="List of artist or channel names")
+    duration_seconds: int = Field(description="Track duration in seconds", ge=0)
+    video_id: str = Field(description="Source video ID")
+    channel_title: Optional[str] = Field(
+        default=None,
+        description="Optional channel title of the uploader",
+    )
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        """Validate that title is not empty."""
+        if not v or not v.strip():
+            raise ValueError("title cannot be empty")
+        return v
+
+    @field_validator("artist_names")
+    @classmethod
+    def validate_artist_names(cls, v: list[str]) -> list[str]:
+        """Validate that artist_names is not empty."""
+        if not v:
+            raise ValueError("artist_names cannot be empty")
+        return v
+
+    @field_validator("video_id")
+    @classmethod
+    def validate_video_id(cls, v: str) -> str:
+        """Validate that video_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("video_id cannot be empty")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
+class LoadedSourcePlaylist(BaseModel):
+    """A fully loaded source playlist with metadata and ordered tracks.
+
+    This model represents a playlist loaded from a source service (e.g., YouTube)
+    with all tracks ordered by position. Tracks must be in strictly ascending
+    position order.
+
+    Attributes:
+        metadata: Metadata about the playlist.
+        tracks: List of tracks in ascending position order.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    metadata: SourcePlaylistMetadata = Field(description="Playlist metadata")
+    tracks: list[SourceTrack] = Field(description="Tracks in ascending position order")
+
+    @model_validator(mode="after")
+    def validate_track_positions(self) -> "LoadedSourcePlaylist":
+        """Validate that tracks are in strictly ascending position order."""
+        if not self.tracks:
+            return self
+
+        positions = [track.position for track in self.tracks]
+        # Check for strictly ascending order (no duplicates, no descending)
+        for i in range(len(positions) - 1):
+            if positions[i] >= positions[i + 1]:
+                raise ValueError(
+                    f"Tracks must be in strictly ascending position order: "
+                    f"position {positions[i]} >= {positions[i + 1]} at index {i}"
+                )
+
+        return self
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
 class SourcePlaylistMetadata(BaseModel):
     """A provider-neutral source playlist metadata model.
 
@@ -134,6 +229,101 @@ class SourcePlaylistMetadata(BaseModel):
         if v < 0:
             raise ValueError("item_count cannot be negative")
         return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
+class SourceTrack(BaseModel):
+    """A track from a source playlist (e.g., YouTube).
+
+    This model represents a single item in a source playlist, with position
+    and metadata, without exposing provider-specific details or credentials.
+
+    Attributes:
+        position: Position in the playlist (0-indexed, strictly ascending).
+        title: Track title.
+        artist_names: List of artist or channel names.
+        duration_seconds: Track duration in seconds.
+        video_id: Source video ID (e.g., YouTube video ID).
+        channel_title: Optional channel title of the uploader.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    position: int = Field(description="Position in the playlist (0-indexed)", ge=0)
+    title: str = Field(description="Track title")
+    artist_names: list[str] = Field(description="List of artist or channel names")
+    duration_seconds: int = Field(description="Track duration in seconds", ge=0)
+    video_id: str = Field(description="Source video ID")
+    channel_title: Optional[str] = Field(
+        default=None,
+        description="Optional channel title of the uploader",
+    )
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        """Validate that title is not empty."""
+        if not v or not v.strip():
+            raise ValueError("title cannot be empty")
+        return v
+
+    @field_validator("artist_names")
+    @classmethod
+    def validate_artist_names(cls, v: list[str]) -> list[str]:
+        """Validate that artist_names is not empty."""
+        if not v:
+            raise ValueError("artist_names cannot be empty")
+        return v
+
+    @field_validator("video_id")
+    @classmethod
+    def validate_video_id(cls, v: str) -> str:
+        """Validate that video_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("video_id cannot be empty")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
+class LoadedSourcePlaylist(BaseModel):
+    """A fully loaded source playlist with metadata and ordered tracks.
+
+    This model represents a playlist loaded from a source service (e.g., YouTube)
+    with all tracks ordered by position. Tracks must be in strictly ascending
+    position order.
+
+    Attributes:
+        metadata: Metadata about the playlist.
+        tracks: List of tracks in ascending position order.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    metadata: SourcePlaylistMetadata = Field(description="Playlist metadata")
+    tracks: list[SourceTrack] = Field(description="Tracks in ascending position order")
+
+    @model_validator(mode="after")
+    def validate_track_positions(self) -> "LoadedSourcePlaylist":
+        """Validate that tracks are in strictly ascending position order."""
+        if not self.tracks:
+            return self
+
+        positions = [track.position for track in self.tracks]
+        # Check for strictly ascending order (no duplicates, no descending)
+        for i in range(len(positions) - 1):
+            if positions[i] >= positions[i + 1]:
+                raise ValueError(
+                    f"Tracks must be in strictly ascending position order: "
+                    f"position {positions[i]} >= {positions[i + 1]} at index {i}"
+                )
+
+        return self
 
     def model_dump(self, **kwargs) -> dict:
         """Override model_dump to ensure consistent serialization."""
@@ -606,6 +796,101 @@ class DestinationPlaylist(BaseModel):
         return super().model_dump(**kwargs)
 
 
+class SourceTrack(BaseModel):
+    """A track from a source playlist (e.g., YouTube).
+
+    This model represents a single item in a source playlist, with position
+    and metadata, without exposing provider-specific details or credentials.
+
+    Attributes:
+        position: Position in the playlist (0-indexed, strictly ascending).
+        title: Track title.
+        artist_names: List of artist or channel names.
+        duration_seconds: Track duration in seconds.
+        video_id: Source video ID (e.g., YouTube video ID).
+        channel_title: Optional channel title of the uploader.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    position: int = Field(description="Position in the playlist (0-indexed)", ge=0)
+    title: str = Field(description="Track title")
+    artist_names: list[str] = Field(description="List of artist or channel names")
+    duration_seconds: int = Field(description="Track duration in seconds", ge=0)
+    video_id: str = Field(description="Source video ID")
+    channel_title: Optional[str] = Field(
+        default=None,
+        description="Optional channel title of the uploader",
+    )
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        """Validate that title is not empty."""
+        if not v or not v.strip():
+            raise ValueError("title cannot be empty")
+        return v
+
+    @field_validator("artist_names")
+    @classmethod
+    def validate_artist_names(cls, v: list[str]) -> list[str]:
+        """Validate that artist_names is not empty."""
+        if not v:
+            raise ValueError("artist_names cannot be empty")
+        return v
+
+    @field_validator("video_id")
+    @classmethod
+    def validate_video_id(cls, v: str) -> str:
+        """Validate that video_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("video_id cannot be empty")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
+class LoadedSourcePlaylist(BaseModel):
+    """A fully loaded source playlist with metadata and ordered tracks.
+
+    This model represents a playlist loaded from a source service (e.g., YouTube)
+    with all tracks ordered by position. Tracks must be in strictly ascending
+    position order.
+
+    Attributes:
+        metadata: Metadata about the playlist.
+        tracks: List of tracks in ascending position order.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    metadata: SourcePlaylistMetadata = Field(description="Playlist metadata")
+    tracks: list[SourceTrack] = Field(description="Tracks in ascending position order")
+
+    @model_validator(mode="after")
+    def validate_track_positions(self) -> "LoadedSourcePlaylist":
+        """Validate that tracks are in strictly ascending position order."""
+        if not self.tracks:
+            return self
+
+        positions = [track.position for track in self.tracks]
+        # Check for strictly ascending order (no duplicates, no descending)
+        for i in range(len(positions) - 1):
+            if positions[i] >= positions[i + 1]:
+                raise ValueError(
+                    f"Tracks must be in strictly ascending position order: "
+                    f"position {positions[i]} >= {positions[i + 1]} at index {i}"
+                )
+
+        return self
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
 class SourcePlaylistMetadata(BaseModel):
     """A provider-neutral source playlist metadata model.
 
@@ -660,6 +945,101 @@ class SourcePlaylistMetadata(BaseModel):
         if v < 0:
             raise ValueError("item_count cannot be negative")
         return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
+class SourceTrack(BaseModel):
+    """A track from a source playlist (e.g., YouTube).
+
+    This model represents a single item in a source playlist, with position
+    and metadata, without exposing provider-specific details or credentials.
+
+    Attributes:
+        position: Position in the playlist (0-indexed, strictly ascending).
+        title: Track title.
+        artist_names: List of artist or channel names.
+        duration_seconds: Track duration in seconds.
+        video_id: Source video ID (e.g., YouTube video ID).
+        channel_title: Optional channel title of the uploader.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    position: int = Field(description="Position in the playlist (0-indexed)", ge=0)
+    title: str = Field(description="Track title")
+    artist_names: list[str] = Field(description="List of artist or channel names")
+    duration_seconds: int = Field(description="Track duration in seconds", ge=0)
+    video_id: str = Field(description="Source video ID")
+    channel_title: Optional[str] = Field(
+        default=None,
+        description="Optional channel title of the uploader",
+    )
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        """Validate that title is not empty."""
+        if not v or not v.strip():
+            raise ValueError("title cannot be empty")
+        return v
+
+    @field_validator("artist_names")
+    @classmethod
+    def validate_artist_names(cls, v: list[str]) -> list[str]:
+        """Validate that artist_names is not empty."""
+        if not v:
+            raise ValueError("artist_names cannot be empty")
+        return v
+
+    @field_validator("video_id")
+    @classmethod
+    def validate_video_id(cls, v: str) -> str:
+        """Validate that video_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("video_id cannot be empty")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
+class LoadedSourcePlaylist(BaseModel):
+    """A fully loaded source playlist with metadata and ordered tracks.
+
+    This model represents a playlist loaded from a source service (e.g., YouTube)
+    with all tracks ordered by position. Tracks must be in strictly ascending
+    position order.
+
+    Attributes:
+        metadata: Metadata about the playlist.
+        tracks: List of tracks in ascending position order.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    metadata: SourcePlaylistMetadata = Field(description="Playlist metadata")
+    tracks: list[SourceTrack] = Field(description="Tracks in ascending position order")
+
+    @model_validator(mode="after")
+    def validate_track_positions(self) -> "LoadedSourcePlaylist":
+        """Validate that tracks are in strictly ascending position order."""
+        if not self.tracks:
+            return self
+
+        positions = [track.position for track in self.tracks]
+        # Check for strictly ascending order (no duplicates, no descending)
+        for i in range(len(positions) - 1):
+            if positions[i] >= positions[i + 1]:
+                raise ValueError(
+                    f"Tracks must be in strictly ascending position order: "
+                    f"position {positions[i]} >= {positions[i + 1]} at index {i}"
+                )
+
+        return self
 
     def model_dump(self, **kwargs) -> dict:
         """Override model_dump to ensure consistent serialization."""
