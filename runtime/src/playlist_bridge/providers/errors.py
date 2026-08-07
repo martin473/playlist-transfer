@@ -62,3 +62,14 @@ class RateLimited(ProviderError):
 
     def __init__(self, service: str, operation: str, safe_message: str) -> None:
         super().__init__(service, operation, safe_message)
+
+
+class InvalidProviderResponse(ProviderError):
+    """Raised when a provider returns an invalid or malformed response.
+
+    This error indicates that the provider responded with data that could
+    not be parsed or did not conform to the expected schema.
+    """
+
+    def __init__(self, service: str, operation: str, safe_message: str) -> None:
+        super().__init__(service, operation, safe_message)
