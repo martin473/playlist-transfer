@@ -60,3 +60,18 @@ def cache_dir() -> Path:
         None: This function does not raise exceptions under normal conditions.
     """
     return Path(user_cache_dir("playlist-bridge"))
+
+
+def jobs_dir() -> Path:
+    """Return the jobs directory beneath the application data directory.
+
+    Returns:
+        Path: The jobs directory path beneath data_dir().
+
+    Side Effects:
+        platform_directory_lookup: Resolves the platform-specific data directory.
+
+    Errors:
+        None: This function does not raise exceptions under normal conditions.
+    """
+    return data_dir() / "jobs"
