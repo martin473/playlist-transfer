@@ -8,7 +8,7 @@ Support on macOS) via the platformdirs library.
 
 from pathlib import Path
 
-from platformdirs import user_config_dir, user_data_dir
+from platformdirs import user_cache_dir, user_config_dir, user_data_dir
 
 
 def config_dir() -> Path:
@@ -43,3 +43,20 @@ def data_dir() -> Path:
         None: This function does not raise exceptions under normal conditions.
     """
     return Path(user_data_dir("playlist-bridge", roaming=True))
+
+
+def cache_dir() -> Path:
+    """Return the platform-specific cache directory for playlist-bridge.
+
+    Returns:
+        Path: The cache directory path (e.g., ~/.cache/playlist-bridge on Linux,
+              ~/Library/Caches/playlist-bridge on macOS,
+              %LOCALAPPDATA%/playlist-bridge/Cache on Windows).
+
+    Side Effects:
+        platform_directory_lookup: Resolves the platform-specific cache directory.
+
+    Errors:
+        None: This function does not raise exceptions under normal conditions.
+    """
+    return Path(user_cache_dir("playlist-bridge"))

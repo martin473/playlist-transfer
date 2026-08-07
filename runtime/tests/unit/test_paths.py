@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from playlist_bridge.paths import config_dir, data_dir
+from playlist_bridge.paths import cache_dir, config_dir, data_dir
 
 
 def test_config_dir_returns_path_beneath_platform_config_base() -> None:
@@ -18,6 +18,16 @@ def test_config_dir_returns_path_beneath_platform_config_base() -> None:
 def test_data_dir_returns_path_beneath_platform_data_base() -> None:
     """Test that data_dir returns a path beneath the platform data base."""
     path = data_dir()
+    assert isinstance(path, Path)
+    # The path should contain "playlist-bridge" as the application name
+    assert "playlist-bridge" in str(path)
+    # Ensure it's an absolute path
+    assert path.is_absolute()
+
+
+def test_cache_dir_returns_path_beneath_platform_cache_base() -> None:
+    """Test that cache_dir returns a path beneath the platform cache base."""
+    path = cache_dir()
     assert isinstance(path, Path)
     # The path should contain "playlist-bridge" as the application name
     assert "playlist-bridge" in str(path)
