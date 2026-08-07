@@ -1,9 +1,60 @@
 """YouTube provider utilities for parsing and handling YouTube data."""
 
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import isodate
 from isodate import ISO8601Error
+
+
+def parse_youtube_playlist_id(url: str) -> str:
+    """
+    Extract a playlist ID from standard YouTube and YouTube Music playlist URLs.
+
+    Args:
+        url: YouTube or YouTube Music URL (e.g., 'https://www.youtube.com/playlist?list=PL123')
+
+    Returns:
+        The extracted playlist ID as a string.
+
+    Raises:
+        ValueError: If the URL does not contain a playlist ID or is a video-only URL.
+
+    Examples:
+        >>> parse_youtube_playlist_id("https://www.youtube.com/playlist?list=PL123")
+        'PL123'
+        >>> parse_youtube_playlist_id("https://music.youtube.com/playlist?list=PL456")
+        'PL456'
+        >>> parse_youtube_playlist_id("https://www.youtube.com/watch?v=abc123")
+        ValueError: No playlist ID found in URL
+        >>> parse_youtube_playlist_id("https://www.youtube.com/playlist")
+        ValueError: No playlist ID found in URL
+    """
+    parsed = urlparse(url.strip())
+    query_params = parse_qs(parsed.query)
+
+    # Check for 'list' parameter
+    list_values = query_params.get('list')
+    if not list_values or not list_values[0]:
+        raise ValueError(f"No playlist ID found in URL: {url}")
+
+    playlist_id = list_values[0]
+
+    # Reject video-only URLs (watch?list=... is still a playlist URL)
+    # Check if it's a video URL without a list parameter
+    if parsed.path in ('/watch', '/watch/', '/v/', '/v'):
+        # This is a video URL, but we already have a 'list' parameter
+        # which means it's a playlist URL with a starting video
+        # So we accept it - the user wants the playlist, not the video
+        pass
+
+    # Reject empty or whitespace-only playlist IDs
+    if not playlist_id.strip():
+        raise ValueError(f"No playlist ID found in URL: {url}")
+
+    # Additional validation: playlist IDs are typically alphanumeric with underscores
+    # We'll accept any non-empty string as the ID
+    return playlist_id
 
 
 def parse_youtube_duration_ms(value: Optional[str]) -> Optional[int]:
