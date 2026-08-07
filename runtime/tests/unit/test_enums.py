@@ -1,7 +1,7 @@
 """Unit tests for domain enums."""
 
 import pytest
-from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService
+from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService, TrackStatus
 
 
 class TestSourceService:
@@ -122,3 +122,29 @@ class TestJobStatus:
         assert JobStatus("completed") == JobStatus.COMPLETED
         assert JobStatus("failed") == JobStatus.FAILED
         assert JobStatus("cancelled") == JobStatus.CANCELLED
+
+
+class TestTrackStatus:
+    """Tests for TrackStatus enum."""
+
+    def test_track_status_values(self) -> None:
+        """Test that all TrackStatus values are defined correctly."""
+        assert TrackStatus.PENDING == "pending"
+        assert TrackStatus.MATCHING == "matching"
+        assert TrackStatus.REVIEW == "review"
+        assert TrackStatus.ACCEPTED == "accepted"
+        assert TrackStatus.UNAVAILABLE == "unavailable"
+        assert TrackStatus.SKIPPED == "skipped"
+        assert TrackStatus.UNMATCHED == "unmatched"
+        assert TrackStatus.FAILED == "failed"
+
+    def test_track_status_parses(self) -> None:
+        """Test that TrackStatus parses from lowercase strings."""
+        assert TrackStatus("pending") == TrackStatus.PENDING
+        assert TrackStatus("matching") == TrackStatus.MATCHING
+        assert TrackStatus("review") == TrackStatus.REVIEW
+        assert TrackStatus("accepted") == TrackStatus.ACCEPTED
+        assert TrackStatus("unavailable") == TrackStatus.UNAVAILABLE
+        assert TrackStatus("skipped") == TrackStatus.SKIPPED
+        assert TrackStatus("unmatched") == TrackStatus.UNMATCHED
+        assert TrackStatus("failed") == TrackStatus.FAILED

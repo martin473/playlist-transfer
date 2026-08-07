@@ -61,6 +61,30 @@ class MatchPolicy(str, Enum):
     LOOSE = "loose"
 
 
+class TrackStatus(str, Enum):
+    """Track-level states for individual source items.
+
+    States:
+        PENDING: Track not yet processed.
+        MATCHING: Currently attempting to find a match.
+        REVIEW: Match requires manual review.
+        ACCEPTED: Match accepted and will be written.
+        UNAVAILABLE: Source item is unavailable (deleted/private).
+        SKIPPED: Track skipped (e.g., non-song item).
+        UNMATCHED: No suitable match found.
+        FAILED: Processing failed with an error.
+    """
+
+    PENDING = "pending"
+    MATCHING = "matching"
+    REVIEW = "review"
+    ACCEPTED = "accepted"
+    UNAVAILABLE = "unavailable"
+    SKIPPED = "skipped"
+    UNMATCHED = "unmatched"
+    FAILED = "failed"
+
+
 class TransferMode(str, Enum):
     """Transfer mode controlling destination playlist mutation.
 
