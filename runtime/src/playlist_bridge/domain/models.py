@@ -304,3 +304,56 @@ class TransferRequest(BaseModel):
         if self.destination_name and not self.destination_name.strip():
             raise ValueError("destination_name cannot be whitespace only")
         return self
+
+
+class TransferResult(BaseModel):
+    """Result of a playlist transfer operation.
+
+    Attributes:
+        job_id: Unique identifier for the transfer job.
+        status: Current status of the transfer (e.g., "completed", "failed", "cancelled").
+        counts: Dictionary of counts for various transfer metrics.
+        destination_id: Optional ID of the destination playlist.
+        report_paths: List of paths to generated report files.
+
+    Example:
+        >>> result = TransferResult(
+        ...     job_id="job_123",
+        ...     status="completed",
+        ...     counts={"total": 50, "matched": 48, "unmatched": 2},
+        ...     destination_id="spotify:playlist:abc123",
+        ...     report_paths=["reports/job_123.json"],
+        ... )
+        >>> result.job_id
+        'job_123'
+    """
+
+    model_config = {"extra": "forbid"}
+
+    job_id: str = Field(description="Unique identifier for the transfer job")
+    status: str = Field(description="Current status of the transfer")
+    counts: dict[str, int] = Field(description="Counts for various transfer metrics")
+    destination_id: Optional[str] = Field(
+        default=None,
+        description="Optional ID of the destination playlist",
+    )
+    report_paths: list[str] = Field(
+        default_factory=list,
+        description="List of paths to generated report files",
+    )
+
+    @field_validator("job_id")
+    @classmethod
+    def validate_job_id(cls, v: str) -> str:
+        """Validate that job_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("job_id cannot be empty")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        """Validate that status is not empty."""
+        if not v or not v.strip():
+            raise ValueError("status cannot be empty")
+        return v

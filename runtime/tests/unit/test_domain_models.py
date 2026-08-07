@@ -775,3 +775,150 @@ class TestTransferRequest:
         errors = exc_info.value.errors()
         # Check that at least one error mentions an unknown field
         assert any("Extra inputs are not permitted" in err.get("msg", "") for err in errors)
+
+
+class TestTransferResult:
+    """Tests for the TransferResult model."""
+
+    def test_create_valid_result(self) -> None:
+        """Test creating a valid TransferResult."""
+        from playlist_bridge.domain.models import TransferResult
+
+        result = TransferResult(
+            job_id="job_123",
+            status="completed",
+            counts={"total": 50, "matched": 48, "unmatched": 2},
+            destination_id="spotify:playlist:abc123",
+            report_paths=["reports/job_123.json"],
+        )
+
+        assert result.job_id == "job_123"
+        assert result.status == "completed"
+        assert result.counts == {"total": 50, "matched": 48, "unmatched": 2}
+        assert result.destination_id == "spotify:playlist:abc123"
+        assert result.report_paths == ["reports/job_123.json"]
+
+    def test_result_without_destination_id(self) -> None:
+        """Test that destination_id can be omitted."""
+        from playlist_bridge.domain.models import TransferResult
+
+        result = TransferResult(
+            job_id="job_456",
+            status="failed",
+            counts={"total": 10, "matched": 0, "unmatched": 10},
+            report_paths=["reports/job_456.json"],
+        )
+
+        assert result.job_id == "job_456"
+        assert result.status == "failed"
+        assert result.counts == {"total": 10, "matched": 0, "unmatched": 10}
+        assert result.destination_id is None
+        assert result.report_paths == ["reports/job_456.json"]
+
+    def test_result_without_report_paths(self) -> None:
+        """Test that report_paths defaults to empty list."""
+        from playlist_bridge.domain.models import TransferResult
+
+        result = TransferResult(
+            job_id="job_789",
+            status="completed",
+            counts={"total": 0, "matched": 0, "unmatched": 0},
+        )
+
+        assert result.job_id == "job_789"
+        assert result.status == "completed"
+        assert result.counts == {"total": 0, "matched": 0, "unmatched": 0}
+        assert result.destination_id is None
+        assert result.report_paths == []
+
+    def test_empty_job_id_is_rejected(self) -> None:
+        """Test that an empty job_id is rejected."""
+        from playlist_bridge.domain.models import TransferResult
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferResult(
+                job_id="",
+                status="completed",
+                counts={"total": 0},
+            )
+
+        errors = exc_info.value.errors()
+        assert any("job_id cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_empty_status_is_rejected(self) -> None:
+        """Test that an empty status is rejected."""
+        from playlist_bridge.domain.models import TransferResult
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferResult(
+                job_id="job_123",
+                status="",
+                counts={"total": 0},
+            )
+
+        errors = exc_info.value.errors()
+        assert any("status cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_blank_job_id_is_rejected(self) -> None:
+        """Test that a blank job_id (whitespace only) is rejected."""
+        from playlist_bridge.domain.models import TransferResult
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferResult(
+                job_id="   ",
+                status="completed",
+                counts={"total": 0},
+            )
+
+        errors = exc_info.value.errors()
+        assert any("job_id cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_blank_status_is_rejected(self) -> None:
+        """Test that a blank status (whitespace only) is rejected."""
+        from playlist_bridge.domain.models import TransferResult
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferResult(
+                job_id="job_123",
+                status="   ",
+                counts={"total": 0},
+            )
+
+        errors = exc_info.value.errors()
+        assert any("status cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_result_round_trip_serialization(self) -> None:
+        """Test that TransferResult round-trips through serialization."""
+        from playlist_bridge.domain.models import TransferResult
+
+        original = TransferResult(
+            job_id="job_abc",
+            status="completed",
+            counts={"total": 100, "matched": 95, "unmatched": 5, "failed": 0},
+            destination_id="spotify:playlist:xyz789",
+            report_paths=["reports/job_abc.json", "reports/job_abc_matches.csv"],
+        )
+
+        data = original.model_dump()
+        reconstructed = TransferResult(**data)
+
+        assert reconstructed.job_id == original.job_id
+        assert reconstructed.status == original.status
+        assert reconstructed.counts == original.counts
+        assert reconstructed.destination_id == original.destination_id
+        assert reconstructed.report_paths == original.report_paths
+
+    def test_unknown_fields_are_rejected_for_result(self) -> None:
+        """Test that unknown fields are rejected by TransferResult."""
+        from playlist_bridge.domain.models import TransferResult
+
+        with pytest.raises(ValidationError) as exc_info:
+            TransferResult(
+                job_id="job_123",
+                status="completed",
+                counts={"total": 0},
+                extra_field="not_allowed",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("Extra inputs are not permitted" in err.get("msg", "") for err in errors)
