@@ -1,7 +1,7 @@
 """Unit tests for domain enums."""
 
 import pytest
-from playlist_bridge.domain.enums import DestinationService, SourceService
+from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService
 
 
 class TestSourceService:
@@ -94,3 +94,31 @@ class TestYouTubeUrlAdapterEquivalence:
     def test_source_service_serialization(self) -> None:
         """Test that SourceService serializes correctly."""
         assert SourceService.YOUTUBE.value == "youtube"
+
+
+class TestJobStatus:
+    """Tests for JobStatus enum."""
+
+    def test_job_status_values(self) -> None:
+        """Test that all JobStatus values are defined correctly."""
+        assert JobStatus.PENDING == "pending"
+        assert JobStatus.READING == "reading"
+        assert JobStatus.MATCHING == "matching"
+        assert JobStatus.REVIEW == "review"
+        assert JobStatus.WRITING == "writing"
+        assert JobStatus.VERIFYING == "verifying"
+        assert JobStatus.COMPLETED == "completed"
+        assert JobStatus.FAILED == "failed"
+        assert JobStatus.CANCELLED == "cancelled"
+
+    def test_job_status_parses(self) -> None:
+        """Test that JobStatus parses from lowercase strings."""
+        assert JobStatus("pending") == JobStatus.PENDING
+        assert JobStatus("reading") == JobStatus.READING
+        assert JobStatus("matching") == JobStatus.MATCHING
+        assert JobStatus("review") == JobStatus.REVIEW
+        assert JobStatus("writing") == JobStatus.WRITING
+        assert JobStatus("verifying") == JobStatus.VERIFYING
+        assert JobStatus("completed") == JobStatus.COMPLETED
+        assert JobStatus("failed") == JobStatus.FAILED
+        assert JobStatus("cancelled") == JobStatus.CANCELLED
