@@ -10,3 +10,12 @@ class SourceService(str, Enum):
     """
 
     YOUTUBE = "youtube"
+
+
+class DestinationService(str, Enum):
+    """Supported destination services.
+
+    Only Spotify is supported in the initial version.
+    """
+
+    SPOTIFY = "spotify"
