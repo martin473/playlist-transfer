@@ -80,6 +80,66 @@ class SpotifyCandidate(BaseModel):
         return super().model_dump(**kwargs)
 
 
+class SourcePlaylistMetadata(BaseModel):
+    """A provider-neutral source playlist metadata model.
+
+    This model represents metadata for a playlist from a source service (e.g., YouTube)
+    without exposing provider-specific details or credentials.
+
+    Attributes:
+        reference: Playlist reference (e.g., URL or ID in the source system).
+        description: Optional description of the playlist.
+        privacy_status: Optional privacy status (e.g., "public", "private", "unlisted").
+        owner_channel_id: Optional channel ID of the playlist owner.
+        owner_channel_title: Optional channel title of the playlist owner.
+        item_count: Number of items in the playlist (non-negative).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    reference: str = Field(description="Playlist reference (e.g., URL or ID in the source system)")
+    description: Optional[str] = Field(
+        default=None,
+        description="Optional description of the playlist",
+    )
+    privacy_status: Optional[str] = Field(
+        default=None,
+        description="Optional privacy status (e.g., 'public', 'private', 'unlisted')",
+    )
+    owner_channel_id: Optional[str] = Field(
+        default=None,
+        description="Optional channel ID of the playlist owner",
+    )
+    owner_channel_title: Optional[str] = Field(
+        default=None,
+        description="Optional channel title of the playlist owner",
+    )
+    item_count: int = Field(
+        description="Number of items in the playlist",
+        ge=0,
+    )
+
+    @field_validator("reference")
+    @classmethod
+    def validate_reference(cls, v: str) -> str:
+        """Validate that reference is not empty."""
+        if not v or not v.strip():
+            raise ValueError("reference cannot be empty")
+        return v
+
+    @field_validator("item_count")
+    @classmethod
+    def validate_item_count(cls, v: int) -> int:
+        """Validate that item_count is non-negative."""
+        if v < 0:
+            raise ValueError("item_count cannot be negative")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
 class MatchScore(BaseModel):
     """A score representing the quality of a match between a source track and a Spotify candidate.
 
@@ -138,61 +198,87 @@ class MatchScore(BaseModel):
         description="Explanatory reasons for the score components",
     )
 
-    @field_validator("reasons")
+    @field_validator("reasons", mode="before")
     @classmethod
     def validate_reasons(cls, v: list[str]) -> list[str]:
-        """Validate that reasons are non-empty strings."""
+        """Validate that reasons are not empty or whitespace-only strings."""
+        if v is None:
+            return []
         for reason in v:
-            if not reason.strip():
+            if not reason or not reason.strip():
                 raise ValueError("Reason strings cannot be empty or whitespace only")
         return v
 
+    @model_validator(mode="after")
+    def validate_consistency(self) -> "MatchScore":
+        """Validate that the total score is consistent with components."""
+        # The total score should be roughly consistent with the average of components.
+        # We don't enforce exact equality because weights may be applied.
+        # Instead, ensure total_score is within the range of 0.0 to 1.0.
+        if not (0.0 <= self.total_score <= 1.0):
+            raise ValueError("total_score must be between 0.0 and 1.0")
+        return self
+
 
 class MatchDecision(BaseModel):
-    """A decision about whether a source track matches a Spotify candidate.
+    """A decision for matching a source track to a Spotify candidate.
 
     Attributes:
-        source_item_id: The ID of the source item being matched.
-        status: The status of the match ("matched" or "unmatched").
-        selected_candidate: The selected Spotify candidate, if matched.
-        ranked_alternatives: Ranked list of alternative candidates.
-        score: The score of the selected candidate, if matched.
-        reason: A reason for the decision.
+        source_item_id: ID of the source track.
+        status: Match status (matched, unmatched, review).
+        selected_candidate: The chosen Spotify candidate (if status is matched).
+        score: The match score (if status is matched).
+        ranked_alternatives: Ordered list of alternative candidates (if any).
+        match_type: The type of match (auto, manual, etc.).
     """
 
-    source_item_id: str = Field(description="The ID of the source item being matched")
-    status: str = Field(description='The status of the match ("matched" or "unmatched")')
+    model_config = {"extra": "forbid"}
+
+    source_item_id: str = Field(description="ID of the source track")
+    status: str = Field(description="Match status: matched, unmatched, review")
     selected_candidate: Optional[SpotifyCandidate] = Field(
         default=None,
-        description="The selected Spotify candidate, if matched",
-    )
-    ranked_alternatives: list[SpotifyCandidate] = Field(
-        default_factory=list,
-        description="Ranked list of alternative candidates",
+        description="The chosen Spotify candidate (if status is matched)",
     )
     score: Optional[MatchScore] = Field(
         default=None,
-        description="The score of the selected candidate, if matched",
+        description="The match score (if status is matched)",
+    )
+    ranked_alternatives: list[SpotifyCandidate] = Field(
+        default_factory=list,
+        description="Ordered list of alternative candidates (if any)",
+    )
+    match_type: Optional[str] = Field(
+        default=None,
+        description="The type of match: auto, manual, etc.",
     )
     reason: str = Field(
-        description="A reason for the decision",
+        description="Reason for the match decision",
     )
-
-    @field_validator("status")
-    @classmethod
-    def validate_status(cls, v: str) -> str:
-        """Validate that the status is either 'matched' or 'unmatched'."""
-        allowed = {"matched", "unmatched"}
-        if v not in allowed:
-            raise ValueError(f"Status must be one of {allowed}")
-        return v
 
     @field_validator("reason")
     @classmethod
     def validate_reason(cls, v: str) -> str:
-        """Validate that the reason is not empty."""
-        if not v.strip():
+        """Validate that reason is not empty or whitespace-only."""
+        if not v or not v.strip():
             raise ValueError("Reason cannot be empty")
+        return v
+
+    @field_validator("source_item_id")
+    @classmethod
+    def validate_source_item_id(cls, v: str) -> str:
+        """Validate that source_item_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("source_item_id cannot be empty")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        """Validate that status is a valid value."""
+        valid_statuses = {"matched", "unmatched", "review"}
+        if v not in valid_statuses:
+            raise ValueError(f"status must be one of {valid_statuses}")
         return v
 
     @field_validator("selected_candidate")
@@ -357,3 +443,224 @@ class TransferResult(BaseModel):
         if not v or not v.strip():
             raise ValueError("status cannot be empty")
         return v
+
+
+class VerificationResult(BaseModel):
+    """Result of verifying destination playlist against expected tracks.
+
+    Attributes:
+        is_exact_match: Whether the actual destination matches expected exactly.
+        missing_positions: List of expected positions (0-indexed) that are missing.
+        extra_positions: List of actual positions (0-indexed) that are extra.
+        reordered_positions: List of expected positions that are reordered.
+        unavailable_positions: List of expected positions with null/unavailable items.
+        expected_items: List of expected track URIs.
+        actual_items: List of actual track URIs (may contain None for unavailable).
+    """
+
+    is_exact_match: bool = Field(
+        description="Whether the actual destination matches expected exactly"
+    )
+    missing_positions: list[int] = Field(
+        default=[],
+        description="List of expected positions (0-indexed) that are missing",
+    )
+    extra_positions: list[int] = Field(
+        default=[],
+        description="List of actual positions (0-indexed) that are extra",
+    )
+    reordered_positions: list[int] = Field(
+        default=[],
+        description="List of expected positions that are reordered",
+    )
+    unavailable_positions: list[int] = Field(
+        default=[],
+        description="List of expected positions with null/unavailable items",
+    )
+    expected_items: list[str] = Field(
+        description="List of expected track URIs"
+    )
+    actual_items: list[str | None] = Field(
+        description="List of actual track URIs (may contain None for unavailable)"
+    )
+
+    @field_validator("missing_positions", "extra_positions", "reordered_positions", "unavailable_positions")
+    @classmethod
+    def validate_positions(cls, v: list[int]) -> list[int]:
+        """Validate that positions are non-negative."""
+        if any(pos < 0 for pos in v):
+            raise ValueError("Positions must be non-negative")
+        return v
+
+    @field_validator("expected_items")
+    @classmethod
+    def validate_expected_items(cls, v: list[str]) -> list[str]:
+        """Validate expected_items is not empty."""
+        if not v:
+            raise ValueError("expected_items cannot be empty")
+        return v
+
+    @model_validator(mode="after")
+    def validate_consistency(self) -> "VerificationResult":
+        """Validate that the result is internally consistent."""
+        # Check that positions are within bounds
+        expected_len = len(self.expected_items)
+        actual_len = len(self.actual_items)
+
+        if any(pos >= expected_len for pos in self.missing_positions):
+            raise ValueError("missing_positions index out of range")
+        if any(pos >= actual_len for pos in self.extra_positions):
+            raise ValueError("extra_positions index out of range")
+        if any(pos >= expected_len for pos in self.reordered_positions):
+            raise ValueError("reordered_positions index out of range")
+        if any(pos >= expected_len for pos in self.unavailable_positions):
+            raise ValueError("unavailable_positions index out of range")
+
+        # Check that is_exact_match is consistent with empty lists
+        if self.is_exact_match:
+            if self.missing_positions or self.extra_positions or self.reordered_positions or self.unavailable_positions:
+                raise ValueError("is_exact_match True but has mismatch details")
+        else:
+            if not (self.missing_positions or self.extra_positions or self.reordered_positions or self.unavailable_positions):
+                raise ValueError("is_exact_match False but no mismatch details")
+
+        return self
+
+
+class DestinationPlaylist(BaseModel):
+    """A provider-neutral destination playlist model.
+
+    This model represents a playlist in a destination service (e.g., Spotify)
+    without exposing provider-specific details or credentials.
+
+    Attributes:
+        playlist_id: Unique identifier for the playlist in the provider's system.
+        name: Display name of the playlist.
+        owner_id: Identifier for the playlist owner.
+        public: Whether the playlist is public.
+        collaborative: Whether the playlist is collaborative.
+        description: Optional description of the playlist.
+        snapshot_id: Optional snapshot ID for version tracking.
+        external_url: Optional external URL to view the playlist.
+        track_count: Number of tracks in the playlist.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    playlist_id: str = Field(description="Unique identifier for the playlist")
+    name: str = Field(description="Display name of the playlist")
+    owner_id: str = Field(description="Identifier for the playlist owner")
+    public: bool = Field(description="Whether the playlist is public")
+    collaborative: bool = Field(description="Whether the playlist is collaborative")
+    description: Optional[str] = Field(
+        default=None,
+        description="Optional description of the playlist",
+    )
+    snapshot_id: Optional[str] = Field(
+        default=None,
+        description="Optional snapshot ID for version tracking",
+    )
+    external_url: Optional[str] = Field(
+        default=None,
+        description="Optional external URL to view the playlist",
+    )
+    track_count: int = Field(
+        description="Number of tracks in the playlist",
+        ge=0,
+    )
+
+    @field_validator("playlist_id")
+    @classmethod
+    def validate_playlist_id(cls, v: str) -> str:
+        """Validate that playlist_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("playlist_id cannot be empty")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate that name is not empty."""
+        if not v or not v.strip():
+            raise ValueError("name cannot be empty")
+        return v
+
+    @field_validator("owner_id")
+    @classmethod
+    def validate_owner_id(cls, v: str) -> str:
+        """Validate that owner_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("owner_id cannot be empty")
+        return v
+
+    @field_validator("track_count")
+    @classmethod
+    def validate_track_count(cls, v: int) -> int:
+        """Validate that track_count is non-negative."""
+        if v < 0:
+            raise ValueError("track_count cannot be negative")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
+
+
+class SourcePlaylistMetadata(BaseModel):
+    """A provider-neutral source playlist metadata model.
+
+    This model represents metadata for a playlist from a source service (e.g., YouTube)
+    without exposing provider-specific details or credentials.
+
+    Attributes:
+        reference: Playlist reference (e.g., URL or ID in the source system).
+        description: Optional description of the playlist.
+        privacy_status: Optional privacy status (e.g., "public", "private", "unlisted").
+        owner_channel_id: Optional channel ID of the playlist owner.
+        owner_channel_title: Optional channel title of the playlist owner.
+        item_count: Number of items in the playlist (non-negative).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    reference: str = Field(description="Playlist reference (e.g., URL or ID in the source system)")
+    description: Optional[str] = Field(
+        default=None,
+        description="Optional description of the playlist",
+    )
+    privacy_status: Optional[str] = Field(
+        default=None,
+        description="Optional privacy status (e.g., 'public', 'private', 'unlisted')",
+    )
+    owner_channel_id: Optional[str] = Field(
+        default=None,
+        description="Optional channel ID of the playlist owner",
+    )
+    owner_channel_title: Optional[str] = Field(
+        default=None,
+        description="Optional channel title of the playlist owner",
+    )
+    item_count: int = Field(
+        description="Number of items in the playlist",
+        ge=0,
+    )
+
+    @field_validator("reference")
+    @classmethod
+    def validate_reference(cls, v: str) -> str:
+        """Validate that reference is not empty."""
+        if not v or not v.strip():
+            raise ValueError("reference cannot be empty")
+        return v
+
+    @field_validator("item_count")
+    @classmethod
+    def validate_item_count(cls, v: int) -> int:
+        """Validate that item_count is non-negative."""
+        if v < 0:
+            raise ValueError("item_count cannot be negative")
+        return v
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization."""
+        return super().model_dump(**kwargs)
