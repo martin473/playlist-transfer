@@ -287,4 +287,114 @@ describe('locatePlaylistBridgeExecutable', () => {
       expect(result).toBe(resolvedPath);
     });
   });
+
+  describe('158.04 - Reject silent arbitrary PATH search', () => {
+    it('should not select a fake binary that exists only on PATH', async () => {
+      // Save original PATH
+      const originalPath = process.env.PATH;
+
+      try {
+        // Create a fake PATH that includes a directory with a fake binary
+        const fakePathDir = '/fake/path/dir';
+        process.env.PATH = fakePathDir;
+
+        // The fake binary exists on PATH but not in any known location
+        const fakeBinaryPath = path.join(fakePathDir, 'playlist-bridge');
+
+        // Mock existsSync to return true only for the fake binary path
+        // and false for all known installation paths
+        mockExistsSync.mockImplementation((p: string) => {
+          return p === fakeBinaryPath;
+        });
+
+        // Mock stat to indicate it's a file and executable
+        mockStat.mockResolvedValue({
+          isFile: () => true,
+          isDirectory: () => false,
+        });
+
+        // Mock access to succeed for the fake binary
+        mockAccess.mockResolvedValue(undefined);
+
+        // The function should NOT find the fake binary on PATH
+        // and should throw ExecutableNotFoundError since no known path exists
+        await expect(locatePlaylistBridgeExecutable()).rejects.toThrow(
+          ExecutableNotFoundError
+        );
+        await expect(locatePlaylistBridgeExecutable()).rejects.toThrow(
+          /Could not locate playlist-bridge executable/
+        );
+      } finally {
+        // Restore original PATH
+        if (originalPath !== undefined) {
+          process.env.PATH = originalPath;
+        } else {
+          delete process.env.PATH;
+        }
+      }
+    });
+
+    it('should not search arbitrary PATH entries even when known paths are empty', async () => {
+      // Mock known paths as non-existent
+      mockExistsSync.mockReturnValue(false);
+
+      // Set PATH to include a directory with a fake binary
+      const originalPath = process.env.PATH;
+      try {
+        process.env.PATH = '/some/path/on/path';
+
+        // The function should throw ExecutableNotFoundError
+        // because it should not search PATH
+        await expect(locatePlaylistBridgeExecutable()).rejects.toThrow(
+          ExecutableNotFoundError
+        );
+        await expect(locatePlaylistBridgeExecutable()).rejects.toThrow(
+          /Could not locate playlist-bridge executable/
+        );
+      } finally {
+        if (originalPath !== undefined) {
+          process.env.PATH = originalPath;
+        } else {
+          delete process.env.PATH;
+        }
+      }
+    });
+
+    it('should skip PATH-only binary even when known paths are checked first', async () => {
+      // This test verifies that the implementation does not fall back
+      // to PATH searching even if it checks known paths first.
+
+      const originalPath = process.env.PATH;
+      try {
+        // Set PATH to include a directory with a fake binary
+        const fakePathDir = '/fake/path/dir';
+        process.env.PATH = fakePathDir;
+
+        const fakeBinaryPath = path.join(fakePathDir, 'playlist-bridge');
+
+        // Mock known paths as non-existent
+        mockExistsSync.mockImplementation((p: string) => {
+          // Only the fake PATH binary exists, known paths don't
+          return p === fakeBinaryPath;
+        });
+
+        mockStat.mockResolvedValue({
+          isFile: () => true,
+          isDirectory: () => false,
+        });
+        mockAccess.mockResolvedValue(undefined);
+
+        // The function should not find the fake binary on PATH
+        await expect(locatePlaylistBridgeExecutable()).rejects.toThrow(
+          ExecutableNotFoundError
+        );
+      } finally {
+        if (originalPath !== undefined) {
+          process.env.PATH = originalPath;
+        } else {
+          delete process.env.PATH;
+        }
+      }
+    });
+  });
 });
