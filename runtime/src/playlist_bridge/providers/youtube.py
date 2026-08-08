@@ -1,10 +1,59 @@
 """YouTube provider utilities for parsing and handling YouTube data."""
 
-from typing import Optional
+from typing import Optional, Protocol
 from urllib.parse import parse_qs, urlparse
 
 import isodate
 from isodate import ISO8601Error
+
+from playlist_bridge.domain.models import (
+    PlaylistReference,
+    LoadedSourcePlaylist,
+)
+
+
+# Simple cancellation token protocol for checking cancellation requests
+class CancellationToken(Protocol):
+    """Protocol for cancellation tokens used to check if an operation should be cancelled."""
+
+    def is_cancelled(self) -> bool:
+        """Return True if the operation has been cancelled."""
+        ...
+
+
+class SourceAdapter(Protocol):
+    """Protocol for loading playlist data from a source provider.
+
+    This protocol defines the interface that any source adapter must implement
+    to load a playlist's metadata and tracks from a source service.
+
+    The load_playlist method loads all tracks in the playlist in their natural
+    order, along with playlist metadata. Implementations should handle network
+    errors, authentication issues, and provider-specific error conditions.
+    """
+
+    def load_playlist(
+        self, reference: PlaylistReference, *, cancel: CancellationToken
+    ) -> LoadedSourcePlaylist:
+        """Load a playlist's metadata and all tracks in order.
+
+        Args:
+            reference: PlaylistReference identifying which playlist to load.
+            cancel: CancellationToken to check for cancellation requests.
+
+        Returns:
+            LoadedSourcePlaylist containing metadata and ordered tracks.
+
+        Raises:
+            AuthenticationRequired: If the user is not authenticated with the source service.
+            PermissionDenied: If the user lacks permission to access the playlist.
+            ProviderNotFound: If the source service URL or reference is invalid.
+            RateLimited: If the provider's rate limit has been exceeded.
+            InvalidProviderResponse: If the provider returns malformed data.
+            TemporaryProviderFailure: If the provider is temporarily unavailable.
+            CancellationRequested: If the operation is cancelled via the token.
+        """
+        ...
 
 
 def parse_youtube_playlist_id(url: str) -> str:
