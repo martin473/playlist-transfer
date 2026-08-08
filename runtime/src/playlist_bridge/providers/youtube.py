@@ -9,6 +9,7 @@ from isodate import ISO8601Error
 from playlist_bridge.domain.models import (
     PlaylistReference,
     LoadedSourcePlaylist,
+    ItemPage,
 )
 
 
@@ -27,15 +28,49 @@ class SourceAdapter(Protocol):
     This protocol defines the interface that any source adapter must implement
     to load a playlist's metadata and tracks from a source service.
 
-    The load_playlist method loads all tracks in the playlist in their natural
-    order, along with playlist metadata. Implementations should handle network
-    errors, authentication issues, and provider-specific error conditions.
+    The load_page method retrieves a single page of playlist items, allowing
+    paginated loading of large playlists. The load_playlist method loads all
+    tracks in the playlist in their natural order, along with playlist metadata.
+    Implementations should handle network errors, authentication issues, and
+    provider-specific error conditions.
     """
+
+    def load_page(
+        self,
+        reference: PlaylistReference,
+        page_token: Optional[str] = None,
+        *,
+        cancel: CancellationToken,
+    ) -> ItemPage:
+        """Load a single page of items from a playlist.
+
+        Args:
+            reference: PlaylistReference identifying which playlist to load.
+            page_token: Token for the page to retrieve, or None for the first page.
+            cancel: CancellationToken to check for cancellation requests.
+
+        Returns:
+            ItemPage containing a list of source tracks and pagination metadata.
+
+        Raises:
+            AuthenticationRequired: If the user is not authenticated with the source service.
+            PermissionDenied: If the user lacks permission to access the playlist.
+            ProviderNotFound: If the source service URL or reference is invalid.
+            RateLimited: If the provider's rate limit has been exceeded.
+            InvalidProviderResponse: If the provider returns malformed data.
+            TemporaryProviderFailure: If the provider is temporarily unavailable.
+            CancellationRequested: If the operation is cancelled via the token.
+        """
+        ...
 
     def load_playlist(
         self, reference: PlaylistReference, *, cancel: CancellationToken
     ) -> LoadedSourcePlaylist:
         """Load a playlist's metadata and all tracks in order.
+
+        This method loads the entire playlist, aggregating all pages into a
+        single complete result. For large playlists, consider using load_page
+        for paginated retrieval.
 
         Args:
             reference: PlaylistReference identifying which playlist to load.
