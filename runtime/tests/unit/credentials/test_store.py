@@ -258,6 +258,128 @@ class InMemoryKeyringBackend:
             self._data[service].pop(key, None)
 
 
+class TestKeyringCacheHandler:
+    """Tests for KeyringCacheHandler class."""
+
+    def test_keyring_cache_handler_get_cached_token_returns_token(self) -> None:
+        """KeyringCacheHandler.get_cached_token should return stored token."""
+        from playlist_bridge.credentials.store import KeyringCacheHandler, save_token
+
+        backend = InMemoryKeyringBackend()
+        service = DestinationService.SPOTIFY
+        profile = "spotify_user"
+        token_payload = {"access_token": "abc123", "expires_in": 3600}
+
+        save_token(backend, service, profile, token_payload)
+        handler = KeyringCacheHandler(service, profile, backend)
+
+        token = handler.get_cached_token()
+        assert token == token_payload
+
+    def test_keyring_cache_handler_get_cached_token_returns_none_for_missing(self) -> None:
+        """KeyringCacheHandler.get_cached_token should return None for missing token."""
+        from playlist_bridge.credentials.store import KeyringCacheHandler
+
+        backend = InMemoryKeyringBackend()
+        handler = KeyringCacheHandler(SourceService.YOUTUBE, "nonexistent", backend)
+
+        token = handler.get_cached_token()
+        assert token is None
+
+    def test_keyring_cache_handler_save_token_to_cache_stores_token(self) -> None:
+        """KeyringCacheHandler.save_token_to_cache should store token in keyring."""
+        from playlist_bridge.credentials.store import KeyringCacheHandler, load_token
+
+        backend = InMemoryKeyringBackend()
+        service = DestinationService.SPOTIFY
+        profile = "spotify_user"
+        token_payload = {"access_token": "xyz789", "refresh_token": "refresh123"}
+
+        handler = KeyringCacheHandler(service, profile, backend)
+        handler.save_token_to_cache(token_payload)
+
+        loaded = load_token(backend, service, profile)
+        assert loaded == token_payload
+
+    def test_keyring_cache_handler_save_token_to_cache_handles_none(self) -> None:
+        """KeyringCacheHandler.save_token_to_cache should handle None token."""
+        from playlist_bridge.credentials.store import KeyringCacheHandler, load_token
+
+        backend = InMemoryKeyringBackend()
+        service = DestinationService.SPOTIFY
+        profile = "spotify_user"
+
+        handler = KeyringCacheHandler(service, profile, backend)
+        handler.save_token_to_cache(None)
+
+        loaded = load_token(backend, service, profile)
+        assert loaded == {}
+
+    def test_keyring_cache_handler_survives_new_instance(self) -> None:
+        """Spotipy token data survives a new cache-handler instance."""
+        from playlist_bridge.credentials.store import KeyringCacheHandler, load_token, save_token
+
+        backend = InMemoryKeyringBackend()
+        service = DestinationService.SPOTIFY
+        profile = "spotify_user"
+        token_payload = {"access_token": "persistent_token", "expires_in": 7200}
+
+        # Store token using the first handler instance
+        handler1 = KeyringCacheHandler(service, profile, backend)
+        handler1.save_token_to_cache(token_payload)
+
+        # Create a new handler instance (simulating a new process/session)
+        handler2 = KeyringCacheHandler(service, profile, backend)
+
+        # The token should survive and be retrievable
+        token = handler2.get_cached_token()
+        assert token == token_payload
+
+        # Also verify via direct load
+        loaded = load_token(backend, service, profile)
+        assert loaded == token_payload
+
+    def test_keyring_cache_handler_delete_cached_token_removes_token(self) -> None:
+        """KeyringCacheHandler.delete_cached_token should remove token."""
+        from playlist_bridge.credentials.store import KeyringCacheHandler, load_token, save_token
+
+        backend = InMemoryKeyringBackend()
+        service = DestinationService.SPOTIFY
+        profile = "spotify_user"
+        token_payload = {"access_token": "token123"}
+
+        save_token(backend, service, profile, token_payload)
+        handler = KeyringCacheHandler(service, profile, backend)
+
+        handler.delete_cached_token()
+
+        loaded = load_token(backend, service, profile)
+        assert loaded == {}
+
+    def test_keyring_cache_handler_raises_value_error_for_none_service(self) -> None:
+        """KeyringCacheHandler should raise ValueError for None service."""
+        from playlist_bridge.credentials.store import KeyringCacheHandler
+
+        backend = InMemoryKeyringBackend()
+        with pytest.raises(ValueError, match="service must not be None"):
+            KeyringCacheHandler(None, "profile", backend)
+
+    def test_keyring_cache_handler_raises_value_error_for_empty_profile(self) -> None:
+        """KeyringCacheHandler should raise ValueError for empty profile."""
+        from playlist_bridge.credentials.store import KeyringCacheHandler
+
+        backend = InMemoryKeyringBackend()
+        with pytest.raises(ValueError, match="profile_name must not be empty"):
+            KeyringCacheHandler(DestinationService.SPOTIFY, "", backend)
+
+    def test_keyring_cache_handler_raises_value_error_for_none_store(self) -> None:
+        """KeyringCacheHandler should raise ValueError for None store."""
+        from playlist_bridge.credentials.store import KeyringCacheHandler
+
+        with pytest.raises(ValueError, match="store must not be None"):
+            KeyringCacheHandler(DestinationService.SPOTIFY, "profile", None)
+
+
 class FailingKeyringBackend:
     """A keyring backend that always fails."""
 

@@ -14,7 +14,9 @@ import keyring
 from keyring.errors import KeyringError as _KeyringError
 
 from playlist_bridge.domain import DestinationService, SourceService
-from playlist_bridge.ports import KeyringError
+from playlist_bridge.ports import CredentialCorruptionError, KeyringError
+
+import spotipy.cache_handler as spotipy_cache
 
 # Fixed keyring service name used for all playlist bridge credentials.
 KEYRING_SERVICE_NAME = "playlist-bridge"
@@ -176,3 +178,83 @@ def delete_token(
         backend.delete_password(KEYRING_SERVICE_NAME, key)
     except _KeyringError as e:
         raise KeyringError(f"Failed to delete token for {service.value}/{profile_name}: {e}") from e
+
+
+class KeyringCacheHandler(spotipy_cache.CacheHandler):
+    """Spotipy cache handler that delegates to the keyring token store.
+
+    This class implements Spotipy's CacheHandler interface, allowing
+    Spotipy to read and write token data using the playlist-bridge
+    keyring storage system.
+
+    Attributes:
+        service: The service (source or destination) for credentials.
+        profile_name: The name of the profile/account.
+        store: The credential store backend.
+    """
+
+    def __init__(
+        self,
+        service: Union[SourceService, DestinationService],
+        profile_name: str,
+        store: keyring.backend.KeyringBackend,
+    ) -> None:
+        """Initialize the cache handler.
+
+        Args:
+            service: The service (source or destination) for credentials.
+            profile_name: The name of the profile/account.
+            store: The keyring backend to use for storage.
+        """
+        if service is None:
+            raise ValueError("service must not be None")
+        if not profile_name:
+            raise ValueError("profile_name must not be empty")
+        if store is None:
+            raise ValueError("store must not be None")
+
+        self.service = service
+        self.profile_name = profile_name
+        self.store = store
+
+    def get_cached_token(self) -> dict | None:
+        """Retrieve the cached token from the keyring.
+
+        Returns:
+            dict | None: The token payload if found, None otherwise.
+        """
+        try:
+            payload = load_token(self.store, self.service, self.profile_name)
+            # load_token returns {} for missing tokens, but spotipy expects None
+            return payload if payload else None
+        except (KeyringError, CredentialCorruptionError):
+            # Spotipy expects None when token cannot be retrieved
+            return None
+
+    def save_token_to_cache(self, token_info: dict) -> None:
+        """Save a token to the keyring.
+
+        Args:
+            token_info: The token payload to save.
+        """
+        if token_info is None:
+            # Spotipy may call this with None; treat as no-op
+            return
+
+        try:
+            save_token(self.store, self.service, self.profile_name, token_info)
+        except (KeyringError, ValueError):
+            # Re-raise as ValueError to match Spotipy's expected error type
+            raise ValueError("Failed to save token to cache")
+
+    def delete_cached_token(self) -> None:
+        """Delete the cached token from the keyring.
+
+        Spotipy's CacheHandler interface doesn't define this method, but
+        it's a useful addition for our implementation.
+        """
+        try:
+            delete_token(self.store, self.service, self.profile_name)
+        except (KeyringError, ValueError):
+            # Re-raise as ValueError to match Spotipy's expected error type
+            raise ValueError("Failed to delete token from cache")

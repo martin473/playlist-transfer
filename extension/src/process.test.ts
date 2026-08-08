@@ -231,6 +231,21 @@ describe('locatePlaylistBridgeExecutable', () => {
       );
     });
 
+    it('should include a configuration hint in the missing executable error message (158.05)', async () => {
+      mockExistsSync.mockReturnValue(false);
+
+      try {
+        await locatePlaylistBridgeExecutable();
+        fail('Expected ExecutableNotFoundError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ExecutableNotFoundError);
+        const message = (error as ExecutableNotFoundError).message;
+        expect(message).toContain('Could not locate playlist-bridge executable');
+        expect(message).toContain('Please ensure the CLI tool is installed and accessible');
+        expect(message).toContain('or provide an explicit path via configuration');
+      }
+    });
+
     it('should skip non-executable files in known paths', async () => {
       const nonExecutablePath = '/usr/local/bin/playlist-bridge';
 

@@ -75,3 +75,51 @@ def jobs_dir() -> Path:
         None: This function does not raise exceptions under normal conditions.
     """
     return data_dir() / "jobs"
+
+
+def reports_dir() -> Path:
+    """Return the reports directory beneath the application data directory.
+
+    Returns:
+        Path: The reports directory path beneath data_dir().
+
+    Side Effects:
+        platform_directory_lookup: Resolves the platform-specific data directory.
+
+    Errors:
+        None: This function does not raise exceptions under normal conditions.
+    """
+    return data_dir() / "reports"
+
+
+def database_path() -> Path:
+    """Return the SQLite database file path beneath the application data directory.
+
+    Returns:
+        Path: The database file path beneath data_dir().
+
+    Side Effects:
+        platform_directory_lookup: Resolves the platform-specific data directory.
+
+    Errors:
+        None: This function does not raise exceptions under normal conditions.
+    """
+    return data_dir() / "playlist_bridge.db"
+
+
+def ensure_app_directories() -> None:
+    """Create all application directories required by playlist-bridge.
+
+    This function creates the directories returned by config_dir(), data_dir(),
+    cache_dir(), jobs_dir(), and reports_dir(). It does not create the database
+    file itself.
+
+    Side Effects:
+        filesystem_create_directory: Creates directories on the filesystem.
+
+    Errors:
+        OSError: If directory creation fails due to permission or filesystem issues.
+    """
+    dirs = [config_dir(), data_dir(), cache_dir(), jobs_dir(), reports_dir()]
+    for d in dirs:
+        d.mkdir(parents=True, exist_ok=True)

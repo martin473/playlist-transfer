@@ -2083,3 +2083,18 @@ class TestLoadedSourcePlaylist:
         assert reconstructed.tracks[0].title == original.tracks[0].title
         assert reconstructed.tracks[1].position == original.tracks[1].position
         assert reconstructed.tracks[1].title == original.tracks[1].title
+
+
+class TestPolicyThresholds:
+    def test_create_valid_thresholds(self):
+        from playlist_bridge.domain.models import PolicyThresholds
+        t = PolicyThresholds(auto_accept_score=0.85, minimum_runner_up_gap=0.10, review_floor=0.40)
+        assert t.auto_accept_score == 0.85
+        assert t.minimum_runner_up_gap == 0.10
+        assert t.review_floor == 0.40
+
+    def test_thresholds_reject_review_floor_above_auto_accept(self):
+        from playlist_bridge.domain.models import PolicyThresholds
+        import pytest
+        with pytest.raises(ValidationError):
+            PolicyThresholds(auto_accept_score=0.70, minimum_runner_up_gap=0.10, review_floor=0.80)

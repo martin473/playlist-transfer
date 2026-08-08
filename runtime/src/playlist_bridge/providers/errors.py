@@ -73,3 +73,15 @@ class InvalidProviderResponse(ProviderError):
 
     def __init__(self, service: str, operation: str, safe_message: str) -> None:
         super().__init__(service, operation, safe_message)
+
+
+class TemporaryProviderFailure(ProviderError):
+    """Raised when a provider experiences a temporary failure.
+
+    This error indicates that the provider encountered a transient issue
+    that may succeed if retried later (e.g., service downtime, network
+    timeouts, or temporary server errors).
+    """
+
+    def __init__(self, service: str, operation: str, safe_message: str) -> None:
+        super().__init__(service, operation, safe_message)

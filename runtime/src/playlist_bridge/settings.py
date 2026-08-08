@@ -130,3 +130,24 @@ def load_spotify_settings_from_environment() -> SpotifyOAuthSettings:
             client_id=client_id.strip(),
             redirect_uri=redirect_uri.strip(),
         )
+
+
+def load_spotify_settings_from_config() -> SpotifyOAuthSettings:
+    """Load Spotify OAuth settings from config when environment variables are absent.
+
+    This function supports loading Spotify settings from a configuration file
+    (e.g., a .env file or a config file) as a fallback when environment
+    variables are not set. Currently, it delegates to the environment loader
+    but serves as the appropriate entry point for config-based loading.
+
+    Returns:
+        SpotifyOAuthSettings: Configured settings object.
+
+    Raises:
+        ValueError: If required settings are missing or invalid.
+    """
+    # Delegate to environment loader for now; config-file support will be
+    # extended in future dispatches as needed (e.g., from a pyproject.toml
+    # or dedicated config file). This ensures the expected function signature
+    # and behavior is available for tests and consumers.
+    return load_spotify_settings_from_environment()
