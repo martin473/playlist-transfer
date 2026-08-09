@@ -30,6 +30,14 @@ class CancellationToken(Protocol):
         """Return True if the operation has been cancelled."""
         ...
 
+    def raise_if_cancelled(self) -> None:
+        """Raise CancellationRequested if the operation has been cancelled.
+
+        Raises:
+            CancellationRequested: If the operation has been cancelled.
+        """
+        ...
+
 
 class SourceAdapter(Protocol):
     """Protocol for loading playlist data from a source provider.

@@ -85,3 +85,14 @@ class TemporaryProviderFailure(ProviderError):
 
     def __init__(self, service: str, operation: str, safe_message: str) -> None:
         super().__init__(service, operation, safe_message)
+
+
+class CancellationRequested(ProviderError):
+    """Raised when an operation is cancelled via a cancellation token.
+
+    This error indicates that the operation was explicitly cancelled by the
+    user or system before completion.
+    """
+
+    def __init__(self, service: str, operation: str, safe_message: str = "Operation cancelled.") -> None:
+        super().__init__(service, operation, safe_message)
