@@ -1,7 +1,10 @@
 """Job runner and job ID generation for playlist-bridge."""
 
+import json
 import uuid
-from typing import Union
+from typing import TextIO, Union
+
+from playlist_bridge.domain.events import JobEvent, JobEventAdapter
 
 
 def new_job_id() -> str:
@@ -51,3 +54,38 @@ def validate_job_id(job_id: Union[str, None]) -> bool:
         return True
     except ValueError:
         return False
+
+
+class JsonlEventEmitter:
+    """Emit JSONL events to a text stream, one event per line.
+
+    This class serializes JobEvent instances to JSON and writes them to the
+    provided stream, flushing after each event to ensure immediate delivery.
+
+    Args:
+        stream: TextIO stream to write events to (e.g., sys.stdout).
+
+    Raises:
+        OSError: If writing to the stream fails.
+    """
+
+    def __init__(self, stream: TextIO) -> None:
+        """Initialize the emitter with a text stream."""
+        self._stream = stream
+
+    def emit(self, event: JobEvent) -> None:
+        """Serialize and write a single event to the stream as JSONL.
+
+        Args:
+            event: The JobEvent instance to emit.
+
+        Raises:
+            OSError: If writing to the stream fails.
+        """
+        try:
+            # Use the JobEventAdapter to ensure proper serialization
+            json_data = JobEventAdapter.dump_json(event, by_alias=False)
+            self._stream.write(json_data.decode("utf-8") + "\n")
+            self._stream.flush()
+        except (OSError, ValueError) as e:
+            raise OSError(f"Failed to emit JSONL event: {e}") from e
