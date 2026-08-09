@@ -204,6 +204,44 @@ def bulk_insert_source_tracks(
     return len(records)
 
 
+def get_source_tracks_ordered(session: Session, job_id: str) -> list[SourceTrack]:
+    """Retrieve source tracks for a job, ordered by source position.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        job_id: Unique identifier for the job.
+
+    Returns:
+        A list of SourceTrack domain objects ordered by position ascending.
+
+    Raises:
+        JobNotFoundError: If the job with the given ID does not exist.
+
+    Side Effects:
+        read-only: This function does not modify the database.
+    """
+    # Check if the job exists
+    job_exists = session.query(JobRecord).filter_by(id=job_id).first()
+    if job_exists is None:
+        raise JobNotFoundError(job_id)
+
+    # Query source tracks ordered by position
+    records = session.query(SourceTrackRecord).filter_by(job_id=job_id).order_by(SourceTrackRecord.position.asc()).all()
+
+    # Convert ORM records to domain SourceTrack objects
+    return [
+        SourceTrack(
+            position=record.position,
+            title=record.title,
+            artist_names=record.artist_names,
+            duration_seconds=record.duration_seconds,
+            video_id=record.video_id,
+            channel_title=record.channel_title,
+        )
+        for record in records
+    ]
+
+
 def save_profile(
     session: Session,
     profile: AccountProfile,

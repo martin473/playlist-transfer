@@ -17,6 +17,7 @@ from playlist_bridge.persistence.repositories import (
     bulk_insert_source_tracks,
     create_job,
     get_job,
+    get_source_tracks_ordered,
     lookup_match_cache,
     upsert_match_cache,
 )
@@ -443,6 +444,112 @@ class TestBulkInsertSourceTracks:
                 job_id=job_id,
                 tracks=tracks,
             )
+
+
+class TestGetSourceTracksOrdered:
+    """Tests for get_source_tracks_ordered function."""
+
+    def test_get_source_tracks_ordered_returns_ordered_tracks(self, in_memory_session: Session):
+        """Retrieved tracks should be ordered by source position ascending."""
+        # Create a job first
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="PL123456789",
+            destination_service="spotify",
+            destination_name="My Playlist",
+            transfer_mode=TransferMode.CREATE,
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        create_job(session=in_memory_session, request=request, job_id=job_id, created_at=created_at)
+
+        # Create source tracks in random order
+        tracks = [
+            SourceTrack(
+                position=2,
+                title="Track 3",
+                artist_names=["Artist C"],
+                duration_seconds=300,
+                video_id="video_3",
+                channel_title="Channel C",
+            ),
+            SourceTrack(
+                position=0,
+                title="Track 1",
+                artist_names=["Artist A"],
+                duration_seconds=180,
+                video_id="video_1",
+                channel_title="Channel A",
+            ),
+            SourceTrack(
+                position=1,
+                title="Track 2",
+                artist_names=["Artist B"],
+                duration_seconds=240,
+                video_id="video_2",
+                channel_title="Channel B",
+            ),
+        ]
+
+        # Insert tracks
+        bulk_insert_source_tracks(
+            session=in_memory_session,
+            job_id=job_id,
+            tracks=tracks,
+        )
+
+        # Retrieve tracks ordered by position
+        retrieved = get_source_tracks_ordered(
+            session=in_memory_session,
+            job_id=job_id,
+        )
+
+        # Verify they are returned in the correct order
+        assert len(retrieved) == 3
+        assert retrieved[0].position == 0
+        assert retrieved[0].video_id == "video_1"
+        assert retrieved[0].title == "Track 1"
+        assert retrieved[1].position == 1
+        assert retrieved[1].video_id == "video_2"
+        assert retrieved[1].title == "Track 2"
+        assert retrieved[2].position == 2
+        assert retrieved[2].video_id == "video_3"
+        assert retrieved[2].title == "Track 3"
+
+    def test_get_source_tracks_ordered_empty_list(self, in_memory_session: Session):
+        """Getting tracks for a job with no tracks should return an empty list."""
+        # Create a job first
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="PL123456789",
+            destination_service="spotify",
+            destination_name="My Playlist",
+            transfer_mode=TransferMode.CREATE,
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        create_job(session=in_memory_session, request=request, job_id=job_id, created_at=created_at)
+
+        # Retrieve tracks (none inserted yet)
+        retrieved = get_source_tracks_ordered(
+            session=in_memory_session,
+            job_id=job_id,
+        )
+
+        assert retrieved == []
+
+    def test_get_source_tracks_ordered_job_not_found(self, in_memory_session: Session):
+        """Getting tracks for a non-existent job should raise JobNotFoundError."""
+        non_existent_job_id = "non-existent-job-id"
+
+        with pytest.raises(JobNotFoundError) as exc_info:
+            get_source_tracks_ordered(
+                session=in_memory_session,
+                job_id=non_existent_job_id,
+            )
+
+        assert exc_info.value.job_id == non_existent_job_id
+        assert str(exc_info.value) == f"Job not found: {non_existent_job_id}"
 
 
 class TestSaveProfile:
