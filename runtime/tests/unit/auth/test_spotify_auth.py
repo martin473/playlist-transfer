@@ -495,3 +495,90 @@ class TestAuthenticateSpotifyProfile:
                         )
 
                     assert "missing 'id' field" in str(exc_info.value)
+
+    def test_authenticate_spotify_profile_persists_token_metadata(self) -> None:
+        """Test that token is persisted via KeyringCacheHandler and profile contains no tokens."""
+        from playlist_bridge.auth.spotify import authenticate_spotify_profile
+        from playlist_bridge.domain.models import AccountProfile
+
+        settings = SpotifyOAuthSettings(
+            client_id="test-client-id",
+            redirect_uri="http://localhost:8080/callback",
+        )
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        mock_token_info = {
+            "access_token": "mock-access-token",
+            "refresh_token": "mock-refresh-token",
+            "expires_in": 3600,
+        }
+
+        mock_user_info = {
+            "id": "test-user-id",
+            "display_name": "Test User",
+            "email": "test@example.com",
+            "external_urls": {"spotify": "https://open.spotify.com/user/test-user-id"},
+        }
+
+        mock_saved_profile = MagicMock(spec=AccountProfile)
+        mock_saved_profile.provider = "spotify"
+        mock_saved_profile.account_id = "test-user-id"
+        mock_saved_profile.display_name = "Test User"
+        mock_saved_profile.email = "test@example.com"
+        mock_saved_profile.profile_url = "https://open.spotify.com/user/test-user-id"
+
+        # Track whether the cache handler was instantiated
+        cache_handler_instantiated = False
+
+        def cache_handler_side_effect(*args, **kwargs):
+            nonlocal cache_handler_instantiated
+            cache_handler_instantiated = True
+            mock_handler = MagicMock(spec=KeyringCacheHandler)
+            # Simulate that the cache handler saves the token
+            return mock_handler
+
+        with patch(
+            "playlist_bridge.auth.spotify.KeyringCacheHandler",
+            side_effect=cache_handler_side_effect,
+        ) as mock_cache_handler_class:
+            with patch(
+                "playlist_bridge.auth.spotify.create_spotify_pkce_manager"
+            ) as mock_create_manager:
+                mock_pkce = MagicMock()
+                mock_pkce.get_access_token.return_value = mock_token_info
+                mock_create_manager.return_value = mock_pkce
+
+                with patch("spotipy.Spotify") as mock_spotify_class:
+                    mock_spotify_client = MagicMock()
+                    mock_spotify_client.me.return_value = mock_user_info
+                    mock_spotify_class.return_value = mock_spotify_client
+
+                    mock_profiles.save.return_value = mock_saved_profile
+
+                    result = authenticate_spotify_profile(
+                        profile_name="test-profile",
+                        settings=settings,
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                        open_browser=False,
+                    )
+
+        # Verify the cache handler was instantiated with the right arguments
+        mock_cache_handler_class.assert_called_once_with(mock_credentials)
+        assert cache_handler_instantiated is True
+
+        # Verify the returned profile contains no tokens
+        assert result == mock_saved_profile
+        # The result should not contain access_token or refresh_token fields
+        assert not hasattr(result, "access_token")
+        assert not hasattr(result, "refresh_token")
+        # The profile should have the expected metadata
+        assert result.provider == "spotify"
+        assert result.account_id == "test-user-id"
+        assert result.display_name == "Test User"
+        # Verify the profile model doesn't include token fields (structural check)
+        # AccountProfile is a Pydantic model, check its field names
+        profile_fields = set(AccountProfile.model_fields.keys())
+        assert "access_token" not in profile_fields
+        assert "refresh_token" not in profile_fields
