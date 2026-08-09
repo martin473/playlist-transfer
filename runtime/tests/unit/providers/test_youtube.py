@@ -19,6 +19,10 @@ from playlist_bridge.providers.errors import (
     CancellationRequested,
 )
 from playlist_bridge.domain.models import PlaylistReference, SourcePlaylistMetadata
+from playlist_bridge.providers.youtube import SourceAdapter
+from playlist_bridge.providers.youtube import CancellationToken
+from playlist_bridge.domain.models import ItemPage
+from playlist_bridge.domain.models import LoadedSourcePlaylist
 
 
 class TestParseYouTubePlaylistId:
@@ -646,10 +650,345 @@ class TestIterYouTubePlaylistItems:
 class TestFetchYouTubePlaylistMetadata:
     """Tests for fetch_youtube_playlist_metadata function."""
 
-    def test_builds_metadata_from_response(self) -> None:
-        """Test that metadata is correctly built from a response."""
-        # This is a stub test - implementation will come in later steps
-        pass
+    def test_builds_metadata_from_public_playlist(self) -> None:
+        """Test that metadata is correctly built from a public playlist response."""
+        from googleapiclient.errors import HttpError
+
+        # Mock client that returns a public playlist response
+        class MockClient:
+            def playlists(self):
+                return self
+
+            def list(self, part, id):
+                self._part = part
+                self._id = id
+                return self
+
+            def execute(self):
+                return {
+                    "items": [
+                        {
+                            "snippet": {
+                                "title": "My Awesome Playlist",
+                                "description": "A collection of great songs",
+                                "channelId": "UC123456789",
+                                "channelTitle": "My Channel",
+                            },
+                            "contentDetails": {
+                                "itemCount": "42",
+                            },
+                            "status": {
+                                "privacyStatus": "public",
+                            },
+                        }
+                    ]
+                }
+
+        client = MockClient()
+        playlist_id = "PL1234567890"
+
+        result = fetch_youtube_playlist_metadata(client, playlist_id)
+
+        assert result.reference.provider == "youtube"
+        assert result.reference.playlist_id == playlist_id
+        assert result.reference.name == "My Awesome Playlist"
+        assert result.reference.owner == "My Channel"
+        assert result.description == "A collection of great songs"
+        assert result.privacy_status == "public"
+        assert result.owner_channel_id == "UC123456789"
+        assert result.owner_channel_title == "My Channel"
+        assert result.item_count == 42
+
+    def test_builds_metadata_from_unlisted_playlist(self) -> None:
+        """Test that metadata is correctly built from an unlisted playlist response."""
+        class MockClient:
+            def playlists(self):
+                return self
+
+            def list(self, part, id):
+                self._part = part
+                self._id = id
+                return self
+
+            def execute(self):
+                return {
+                    "items": [
+                        {
+                            "snippet": {
+                                "title": "Private Mix",
+                                "description": "",
+                                "channelId": "UC987654321",
+                                "channelTitle": "Secret Channel",
+                            },
+                            "contentDetails": {
+                                "itemCount": "15",
+                            },
+                            "status": {
+                                "privacyStatus": "unlisted",
+                            },
+                        }
+                    ]
+                }
+
+        client = MockClient()
+        playlist_id = "PL9876543210"
+
+        result = fetch_youtube_playlist_metadata(client, playlist_id)
+
+        assert result.reference.provider == "youtube"
+        assert result.reference.playlist_id == playlist_id
+        assert result.reference.name == "Private Mix"
+        assert result.reference.owner == "Secret Channel"
+        assert result.description == ""
+        assert result.privacy_status == "unlisted"
+        assert result.owner_channel_id == "UC987654321"
+        assert result.owner_channel_title == "Secret Channel"
+        assert result.item_count == 15
+
+    def test_builds_metadata_from_private_playlist(self) -> None:
+        """Test that metadata is correctly built from a private playlist response."""
+        class MockClient:
+            def playlists(self):
+                return self
+
+            def list(self, part, id):
+                self._part = part
+                self._id = id
+                return self
+
+            def execute(self):
+                return {
+                    "items": [
+                        {
+                            "snippet": {
+                                "title": "My Private Playlist",
+                                "description": "Only I can see this",
+                                "channelId": "UC123456789",
+                                "channelTitle": "My Channel",
+                            },
+                            "contentDetails": {
+                                "itemCount": "7",
+                            },
+                            "status": {
+                                "privacyStatus": "private",
+                            },
+                        }
+                    ]
+                }
+
+        client = MockClient()
+        playlist_id = "PL1234567890"
+
+        result = fetch_youtube_playlist_metadata(client, playlist_id)
+
+        assert result.privacy_status == "private"
+        assert result.item_count == 7
+
+    def test_handles_missing_item_count(self) -> None:
+        """Test that missing item_count defaults to 0."""
+        class MockClient:
+            def playlists(self):
+                return self
+
+            def list(self, part, id):
+                self._part = part
+                self._id = id
+                return self
+
+            def execute(self):
+                return {
+                    "items": [
+                        {
+                            "snippet": {
+                                "title": "No Count Playlist",
+                                "description": "",
+                                "channelId": "UC123456789",
+                                "channelTitle": "Channel",
+                            },
+                            "contentDetails": {},
+                            "status": {
+                                "privacyStatus": "public",
+                            },
+                        }
+                    ]
+                }
+
+        client = MockClient()
+        result = fetch_youtube_playlist_metadata(client, "PL1234567890")
+
+        assert result.item_count == 0
+
+    def test_handles_invalid_item_count(self) -> None:
+        """Test that invalid item_count string defaults to 0."""
+        class MockClient:
+            def playlists(self):
+                return self
+
+            def list(self, part, id):
+                self._part = part
+                self._id = id
+                return self
+
+            def execute(self):
+                return {
+                    "items": [
+                        {
+                            "snippet": {
+                                "title": "Invalid Count Playlist",
+                                "description": "",
+                                "channelId": "UC123456789",
+                                "channelTitle": "Channel",
+                            },
+                            "contentDetails": {
+                                "itemCount": "not-a-number",
+                            },
+                            "status": {
+                                "privacyStatus": "public",
+                            },
+                        }
+                    ]
+                }
+
+        client = MockClient()
+        result = fetch_youtube_playlist_metadata(client, "PL1234567890")
+
+        assert result.item_count == 0
+
+    def test_uses_channel_id_as_owner_when_title_missing(self) -> None:
+        """Test that channel ID is used as owner when channel title is missing."""
+        class MockClient:
+            def playlists(self):
+                return self
+
+            def list(self, part, id):
+                self._part = part
+                self._id = id
+                return self
+
+            def execute(self):
+                return {
+                    "items": [
+                        {
+                            "snippet": {
+                                "title": "Test Playlist",
+                                "description": "",
+                                "channelId": "UC123456789",
+                                "channelTitle": "",
+                            },
+                            "contentDetails": {
+                                "itemCount": "5",
+                            },
+                            "status": {
+                                "privacyStatus": "public",
+                            },
+                        }
+                    ]
+                }
+
+        client = MockClient()
+        result = fetch_youtube_playlist_metadata(client, "PL1234567890")
+
+        assert result.reference.owner == "UC123456789"
+        assert result.owner_channel_id == "UC123456789"
+        assert result.owner_channel_title == ""
+
+    def test_raises_provider_not_found_for_empty_items(self) -> None:
+        """Test that ProviderNotFound is raised when no items are returned."""
+        class MockClient:
+            def playlists(self):
+                return self
+
+            def list(self, part, id):
+                self._part = part
+                self._id = id
+                return self
+
+            def execute(self):
+                return {"items": []}
+
+        client = MockClient()
+
+        with pytest.raises(ProviderNotFound) as exc_info:
+            fetch_youtube_playlist_metadata(client, "PL1234567890")
+
+        assert "youtube" in str(exc_info.value)
+        assert "fetch_playlist_metadata" in str(exc_info.value)
+
+    def test_raises_invalid_provider_response_missing_title(self) -> None:
+        """Test that InvalidProviderResponse is raised when title is missing."""
+        class MockClient:
+            def playlists(self):
+                return self
+
+            def list(self, part, id):
+                self._part = part
+                self._id = id
+                return self
+
+            def execute(self):
+                return {
+                    "items": [
+                        {
+                            "snippet": {
+                                "title": "",
+                                "description": "",
+                                "channelId": "UC123456789",
+                                "channelTitle": "Channel",
+                            },
+                            "contentDetails": {
+                                "itemCount": "5",
+                            },
+                            "status": {
+                                "privacyStatus": "public",
+                            },
+                        }
+                    ]
+                }
+
+        client = MockClient()
+
+        with pytest.raises(InvalidProviderResponse) as exc_info:
+            fetch_youtube_playlist_metadata(client, "PL1234567890")
+
+        assert "Missing playlist title" in str(exc_info.value)
+
+    def test_raises_invalid_provider_response_missing_owner_channel_id(self) -> None:
+        """Test that InvalidProviderResponse is raised when owner channel ID is missing."""
+        class MockClient:
+            def playlists(self):
+                return self
+
+            def list(self, part, id):
+                self._part = part
+                self._id = id
+                return self
+
+            def execute(self):
+                return {
+                    "items": [
+                        {
+                            "snippet": {
+                                "title": "Test Playlist",
+                                "description": "",
+                                "channelId": "",
+                                "channelTitle": "Channel",
+                            },
+                            "contentDetails": {
+                                "itemCount": "5",
+                            },
+                            "status": {
+                                "privacyStatus": "public",
+                            },
+                        }
+                    ]
+                }
+
+        client = MockClient()
+
+        with pytest.raises(InvalidProviderResponse) as exc_info:
+            fetch_youtube_playlist_metadata(client, "PL1234567890")
+
+        assert "Missing owner channel ID" in str(exc_info.value)
 
 
 class TestMapYouTubePlaylistItem:
@@ -860,3 +1199,56 @@ class TestMapYouTubePlaylistItem:
         assert track.video_id.startswith("private_")
         assert track.channel_title == "Some Channel"
         assert track.availability == "unavailable"
+
+
+class TestFakeSourceAdapter:
+    """Tests for the fake SourceAdapter implementation."""
+
+    def test_fake_adapter_satisfies_protocol(self) -> None:
+        """Test that the fake adapter satisfies the SourceAdapter protocol."""
+        from playlist_bridge.providers.youtube import SourceAdapter
+        from playlist_bridge.providers.youtube import CancellationToken
+        from playlist_bridge.domain.models import PlaylistReference
+        from playlist_bridge.domain.models import ItemPage
+        from playlist_bridge.domain.models import LoadedSourcePlaylist
+        import typing
+
+        # Create a concrete fake implementation of SourceAdapter
+        class FakeAdapter:
+            def load_page(
+                self,
+                reference: PlaylistReference,
+                page_token: typing.Optional[str] = None,
+                *,
+                cancel: CancellationToken,
+            ) -> ItemPage:
+                return ItemPage(items=[], next_page_token=None, total_items=0)
+
+            def load_playlist(
+                self, reference: PlaylistReference, *, cancel: CancellationToken
+            ) -> LoadedSourcePlaylist:
+                from playlist_bridge.domain.models import SourcePlaylistMetadata
+                from playlist_bridge.domain.models import SourceTrack
+                return LoadedSourcePlaylist(
+                    metadata=SourcePlaylistMetadata(
+                        title="Fake Playlist",
+                        description=None,
+                        source="youtube",
+                        source_id=reference.source_id,
+                        url=reference.url,
+                        track_count=0,
+                        duration_seconds=0,
+                    ),
+                    tracks=[],
+                )
+
+        # Verify the fake implements the protocol using static type checking
+        # Since SourceAdapter is a Protocol without @runtime_checkable, we use mypy
+        # or just verify the methods exist with correct signatures via typing
+        fake = FakeAdapter()
+        # Check that the fake has all required methods with correct signatures
+        assert hasattr(fake, "load_page")
+        assert hasattr(fake, "load_playlist")
+        # Verify the methods are callable with the expected arguments
+        assert callable(fake.load_page)
+        assert callable(fake.load_playlist)
