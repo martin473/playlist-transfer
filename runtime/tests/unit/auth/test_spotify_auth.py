@@ -10,6 +10,7 @@ from playlist_bridge.credentials.store import KeyringCacheHandler
 from playlist_bridge.settings import (
     SpotifyOAuthSettings,
     load_spotify_settings_from_environment,
+    load_spotify_settings_from_config,
 )
 
 
@@ -124,6 +125,77 @@ class TestLoadSpotifySettingsFromEnvironment:
         ):
             with pytest.raises(ValueError, match="SPOTIFY_REDIRECT_URI"):
                 load_spotify_settings_from_environment()
+
+
+class TestLoadSpotifySettingsFromConfig:
+    """Tests for load_spotify_settings_from_config function."""
+
+    def test_load_from_environment_all_variables_set(self) -> None:
+        """Test loading with all environment variables set via config loader."""
+        with patch.dict(
+            os.environ,
+            {
+                "SPOTIFY_CLIENT_ID": "test-client-id",
+                "SPOTIFY_REDIRECT_URI": "http://localhost:8080/callback",
+                "SPOTIFY_SCOPES": "playlist-read-private user-read-email",
+            },
+        ):
+            result = load_spotify_settings_from_config()
+            assert result.client_id == "test-client-id"
+            assert result.redirect_uri == "http://localhost:8080/callback"
+            assert result.scopes == ("playlist-read-private", "user-read-email")
+
+    def test_load_with_default_scopes(self) -> None:
+        """Test loading with only required environment variables via config loader."""
+        with patch.dict(
+            os.environ,
+            {
+                "SPOTIFY_CLIENT_ID": "test-client-id",
+                "SPOTIFY_REDIRECT_URI": "http://localhost:8080/callback",
+            },
+        ):
+            result = load_spotify_settings_from_config()
+            assert result.client_id == "test-client-id"
+            assert result.redirect_uri == "http://localhost:8080/callback"
+            assert result.scopes is not None
+            assert len(result.scopes) > 0
+            assert "playlist-read-private" in result.scopes
+
+    def test_missing_client_id_raises_error(self) -> None:
+        """Test that missing client ID raises ValueError from config loader."""
+        with patch.dict(os.environ, {"SPOTIFY_REDIRECT_URI": "http://localhost:8080/callback"}):
+            with pytest.raises(ValueError, match="SPOTIFY_CLIENT_ID"):
+                load_spotify_settings_from_config()
+
+    def test_missing_redirect_uri_raises_error(self) -> None:
+        """Test that missing redirect URI raises ValueError from config loader."""
+        with patch.dict(os.environ, {"SPOTIFY_CLIENT_ID": "test-client-id"}):
+            with pytest.raises(ValueError, match="SPOTIFY_REDIRECT_URI"):
+                load_spotify_settings_from_config()
+
+    def test_empty_client_id_raises_error(self) -> None:
+        """Test that empty client ID raises ValueError from config loader."""
+        with patch.dict(
+            os.environ,
+            {
+                "SPOTIFY_CLIENT_ID": "",
+                "SPOTIFY_REDIRECT_URI": "http://localhost:8080/callback",
+            },
+        ):
+            with pytest.raises(ValueError, match="SPOTIFY_CLIENT_ID"):
+                load_spotify_settings_from_config()
+
+    def test_empty_redirect_uri_raises_error(self) -> None:
+        """Test that empty redirect URI raises ValueError from config loader."""
+        with patch.dict(
+            os.environ,
+            {
+                "SPOTIFY_CLIENT_ID": "test-client-id",
+                "SPOTIFY_REDIRECT_URI": "",
+            },
+        ):
+            with pytest.raises(ValueError, match="SPOTIFY_REDIRECT_URI"):
+                load_spotify_settings_from_config()
 
 
 class TestCreateSpotifyPkceManager:
