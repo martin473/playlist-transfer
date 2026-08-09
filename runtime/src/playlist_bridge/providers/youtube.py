@@ -10,6 +10,15 @@ from playlist_bridge.domain.models import (
     PlaylistReference,
     LoadedSourcePlaylist,
     ItemPage,
+    SourcePlaylistMetadata,
+)
+from playlist_bridge.providers.errors import (
+    AuthenticationRequired,
+    PermissionDenied,
+    ProviderNotFound,
+    RateLimited,
+    InvalidProviderResponse,
+    TemporaryProviderFailure,
 )
 
 
@@ -226,3 +235,179 @@ def parse_youtube_duration_ms(value: Optional[str]) -> Optional[int]:
         return None
     except (ValueError, OverflowError, TypeError):
         return None
+
+
+def fetch_youtube_playlist_metadata(client: object, playlist_id: str) -> SourcePlaylistMetadata:
+    """Fetch metadata for a YouTube playlist using the provided client.
+
+    This function calls the YouTube Data API playlist-list endpoint for a single
+    playlist ID and maps the response fields to the SourcePlaylistMetadata model.
+
+    Args:
+        client: YouTube Data API client (googleapiclient discovery resource).
+        playlist_id: YouTube playlist ID to fetch.
+
+    Returns:
+        SourcePlaylistMetadata containing title, description, privacy status,
+        owner channel, and item count.
+
+    Raises:
+        AuthenticationRequired: If credentials are invalid or expired.
+        PermissionDenied: If the user lacks permission to access the playlist.
+        ProviderNotFound: If the playlist does not exist.
+        RateLimited: If the YouTube API rate limit is exceeded.
+        InvalidProviderResponse: If the response is malformed or missing fields.
+        TemporaryProviderFailure: If the API is temporarily unavailable.
+    """
+    import json
+    from googleapiclient.errors import HttpError
+
+    try:
+        # Call the YouTube API playlist-list endpoint
+        request = client.playlists().list(  # type: ignore[attr-defined]
+            part="snippet,contentDetails,status",
+            id=playlist_id,
+        )
+        response = request.execute()
+    except HttpError as e:
+        # Map HTTP errors to our provider errors
+        status_code = e.resp.status
+
+        if status_code == 401 or status_code == 403:
+            # Authentication or permission issue
+            if "quota" in str(e).lower():
+                raise RateLimited("youtube", "fetch_playlist_metadata", str(e))
+            # Check if it's a permission denied error
+            if "permission" in str(e).lower():
+                raise PermissionDenied("youtube", "fetch_playlist_metadata", str(e))
+            raise AuthenticationRequired("youtube", "fetch_playlist_metadata", str(e))
+        elif status_code == 404:
+            # Playlist not found
+            raise ProviderNotFound("youtube", "fetch_playlist_metadata", f"Playlist {playlist_id} not found")
+        elif status_code == 429:
+            raise RateLimited("youtube", "fetch_playlist_metadata", str(e))
+        elif status_code >= 500:
+            raise TemporaryProviderFailure("youtube", "fetch_playlist_metadata", str(e))
+        else:
+            # Unknown error
+            raise InvalidProviderResponse("youtube", "fetch_playlist_metadata", str(e))
+
+    # Validate response structure
+
+    # Validate response structure
+    items = response.get("items")
+    if not items or len(items) == 0:
+        raise ProviderNotFound("youtube", "fetch_playlist_metadata", f"Playlist {playlist_id} not found")
+
+    playlist_data = items[0]
+
+    # Extract required fields
+    try:
+        snippet = playlist_data.get("snippet", {})
+        content_details = playlist_data.get("contentDetails", {})
+        status = playlist_data.get("status", {})
+
+        title = snippet.get("title", "")
+        if not title:
+            raise InvalidProviderResponse("youtube", "fetch_playlist_metadata", "Missing playlist title")
+
+        description = snippet.get("description", "")
+
+        # Privacy status mapping: YouTube uses 'privacyStatus' in status section
+        # Values: 'public', 'unlisted', 'private'
+        privacy_status = status.get("privacyStatus", "private")
+        # Ensure it's one of the expected values
+        if privacy_status not in ("public", "private", "unlisted"):
+            privacy_status = "private"
+
+        # Owner channel info is in snippet
+        owner_channel_id = snippet.get("channelId", "")
+        owner_channel_title = snippet.get("channelTitle", "")
+
+        if not owner_channel_id:
+            raise InvalidProviderResponse("youtube", "fetch_playlist_metadata", "Missing owner channel ID")
+
+        # Item count from contentDetails
+        item_count_str = content_details.get("itemCount", "0")
+        try:
+            item_count = int(item_count_str)
+        except (ValueError, TypeError):
+            item_count = 0
+
+        # Create a PlaylistReference
+        reference = PlaylistReference(
+            provider="youtube",
+            playlist_id=playlist_id,
+            name=title,
+            owner=owner_channel_title or owner_channel_id,
+        )
+
+        # Build and return the SourcePlaylistMetadata
+        return SourcePlaylistMetadata(
+            reference=reference,
+            description=description,
+            privacy_status=privacy_status,
+            owner_channel_id=owner_channel_id,
+            owner_channel_title=owner_channel_title,
+            item_count=item_count,
+        )
+    except KeyError as e:
+        # Missing expected field
+        raise InvalidProviderResponse("youtube", "fetch_playlist_metadata", f"Missing expected field: {e}")
+    except ValueError as e:
+        # Invalid data
+        raise InvalidProviderResponse("youtube", "fetch_playlist_metadata", str(e))
+
+
+def map_youtube_error(error: Exception, operation: str) -> ProviderError:
+    """Map a YouTube API HttpError to a ProviderError type.
+
+    Args:
+        error: The exception raised by the YouTube API client.
+        operation: The operation being performed (e.g., 'fetch_playlist_metadata').
+
+    Returns:
+        A ProviderError subclass appropriate for the error.
+
+    The mapping follows these rules:
+        - 401 (Unauthorized) -> AuthenticationRequired
+        - 403 (Forbidden) -> PermissionDenied
+        - 404 (Not Found) -> ProviderNotFound
+        - 429 (Too Many Requests) -> RateLimited
+        - 5xx (Server Error) -> TemporaryProviderFailure
+        - Other or unknown status -> InvalidProviderResponse
+    """
+    # Import HttpError locally to avoid dependency issues if not installed
+    try:
+        from googleapiclient.errors import HttpError
+    except ImportError:
+        # If googleapiclient isn't available, return InvalidProviderResponse
+        return InvalidProviderResponse("youtube", operation, str(error))
+
+    if not isinstance(error, HttpError):
+        return InvalidProviderResponse("youtube", operation, str(error))
+
+    status_code = error.resp.status if hasattr(error, "resp") else None
+
+    if status_code == 401:
+        return AuthenticationRequired("youtube", operation, "Authentication required. Please log in again.")
+    elif status_code == 403:
+        return PermissionDenied("youtube", operation, "Permission denied for this operation.")
+    elif status_code == 404:
+        return ProviderNotFound("youtube", operation, "Resource not found.")
+    elif status_code == 429:
+        retry_after = None
+        if hasattr(error, "resp") and hasattr(error.resp, "headers"):
+            retry_after = error.resp.headers.get("Retry-After")
+        message = "Rate limit exceeded. Please try again later."
+        if retry_after:
+            message = f"Rate limit exceeded. Retry-After: {retry_after} seconds."
+        return RateLimited("youtube", operation, message)
+    elif status_code is not None and 500 <= status_code < 600:
+        return TemporaryProviderFailure("youtube", operation, f"YouTube API server error: {status_code}")
+    else:
+        return InvalidProviderResponse(
+            "youtube",
+            operation,
+            f"Unexpected YouTube API error: status={status_code} detail={str(error)}",
+        )
