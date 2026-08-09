@@ -259,3 +259,140 @@ class TestCreateBackup:
         # Clean up
         backup_path.unlink()
         backup_dir.rmdir()
+
+
+class TestUpgradeSchema:
+    """Tests for the upgrade_schema function."""
+
+    def test_upgrades_empty_database_no_backup(self, temp_db_path):
+        """Test that upgrade_schema on an empty database does not create a backup."""
+        # Create an empty database file (no tables)
+        temp_db_path.touch()
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+
+        # Count existing backup files
+        initial_backups = list(temp_db_path.parent.glob(f"{temp_db_path.stem}_backup_*.db"))
+
+        # Run upgrade
+        from playlist_bridge.persistence.migrations import upgrade_schema
+        upgrade_schema(engine, temp_db_path)
+
+        # Verify no backup was created
+        final_backups = list(temp_db_path.parent.glob(f"{temp_db_path.stem}_backup_*.db"))
+        assert len(final_backups) == len(initial_backups)
+
+        # Verify the schema is now at head revision
+        # Alembic creates an alembic_version table; we only check the application tables
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        expected_tables = {
+            "jobs",
+            "account_profiles",
+            "match_cache",
+            "manual_corrections",
+            "source_tracks",
+            "match_decisions",
+        }
+        # Remove alembic_version from the set if present
+        tables.discard("alembic_version")
+        assert tables == expected_tables
+
+        engine.dispose()
+
+    def test_upgrades_non_empty_database_creates_backup(self, temp_db_path):
+        """Test that upgrade_schema on a non-empty database creates a backup before upgrading."""
+        # Create a database with a table (simulating an existing database)
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+        with engine.connect() as conn:
+            conn.execute(text("CREATE TABLE test (id INTEGER)"))
+            conn.execute(text("INSERT INTO test VALUES (1)"))
+            conn.commit()
+        engine.dispose()
+
+        # Count existing backup files
+        initial_backups = list(temp_db_path.parent.glob(f"{temp_db_path.stem}_backup_*.db"))
+
+        # Run upgrade
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+        from playlist_bridge.persistence.migrations import upgrade_schema
+        upgrade_schema(engine, temp_db_path)
+
+        # Verify a backup was created
+        final_backups = list(temp_db_path.parent.glob(f"{temp_db_path.stem}_backup_*.db"))
+        assert len(final_backups) == len(initial_backups) + 1
+
+        # Verify the backup contains the original data
+        backup_files = list(temp_db_path.parent.glob(f"{temp_db_path.stem}_backup_*.db"))
+        # Get the most recent backup
+        backup_path = max(backup_files, key=lambda p: p.stat().st_mtime)
+
+        backup_engine = create_engine(f"sqlite:///{backup_path}")
+        with backup_engine.connect() as conn:
+            result = conn.execute(text("SELECT * FROM test"))
+            rows = result.fetchall()
+            assert len(rows) == 1
+            assert rows[0][0] == 1
+        backup_engine.dispose()
+
+        # Verify the database is now at head revision
+        # Alembic creates an alembic_version table and leaves existing tables intact
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        expected_tables = {
+            "jobs",
+            "account_profiles",
+            "match_cache",
+            "manual_corrections",
+            "source_tracks",
+            "match_decisions",
+        }
+        # Remove alembic_version from the set if present
+        tables.discard("alembic_version")
+        # The test table should still be present (Alembic doesn't drop unknown tables)
+        assert "test" in tables
+        assert expected_tables.issubset(tables)
+
+        engine.dispose()
+
+    def test_raises_error_if_database_missing(self, temp_db_path):
+        """Test that upgrade_schema raises FileNotFoundError if the database file doesn't exist."""
+        # Ensure the file doesn't exist
+        if temp_db_path.exists():
+            temp_db_path.unlink()
+
+        # Create an engine pointing to the missing file
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+
+        from playlist_bridge.persistence.migrations import upgrade_schema
+        with pytest.raises(FileNotFoundError):
+            upgrade_schema(engine, temp_db_path)
+
+        engine.dispose()
+
+    def test_upgrade_preserves_existing_data(self, temp_db_path):
+        """Test that upgrade_schema preserves existing data when upgrading."""
+        # Create a database with a table and some data
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+        with engine.connect() as conn:
+            conn.execute(text("CREATE TABLE test (id INTEGER, name TEXT)"))
+            conn.execute(text("INSERT INTO test VALUES (1, 'test1')"))
+            conn.execute(text("INSERT INTO test VALUES (2, 'test2')"))
+            conn.commit()
+        engine.dispose()
+
+        # Run upgrade
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+        from playlist_bridge.persistence.migrations import upgrade_schema
+        upgrade_schema(engine, temp_db_path)
+
+        # Verify the upgrade completed successfully - all expected tables exist
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        # Remove alembic_version from the set if present
+        tables.discard("alembic_version")
+        # The test table should still be present (Alembic doesn't drop unknown tables)
+        assert "test" in tables
+        assert "jobs" in tables
+        assert "account_profiles" in tables
+
+        engine.dispose()

@@ -99,6 +99,57 @@ def get_existing_tables(engine: Engine) -> set[str]:
     return set(inspector.get_table_names())
 
 
+def upgrade_schema(engine: Engine, database_file: Path) -> None:
+    """
+    Upgrade the database schema to the latest Alembic revision.
+
+    This function creates a timestamped backup of the database before upgrading
+    if the database is non-empty (has at least one table). The backup is stored
+    in the same directory as the database file and is never deleted.
+
+    Args:
+        engine: SQLAlchemy Engine connected to the target database.
+        database_file: Path to the SQLite database file.
+
+    Raises:
+        FileNotFoundError: If the database file does not exist.
+        OSError: If the backup cannot be created due to filesystem errors.
+        RuntimeError: If the Alembic upgrade fails.
+
+    Note:
+        Backups are created with the format: {db_name}_backup_{timestamp}.db
+        and are never automatically deleted.
+    """
+    import os
+    from alembic.config import Config
+    from alembic import command
+
+    # Check if the database file exists
+    if not database_file.exists():
+        raise FileNotFoundError(f"Database file not found: {database_file}")
+
+    # Check if the database has any tables (non-empty)
+    existing_tables = get_existing_tables(engine)
+    if existing_tables:
+        # Database is non-empty, create a backup before upgrading
+        create_backup(database_file)
+
+    # Create Alembic config and run upgrade to head
+    try:
+        # Set the DATABASE_URL environment variable for Alembic to use
+        # This is needed because migrations/env.py reads from os.environ
+        os.environ["DATABASE_URL"] = str(engine.url)
+
+        alembic_cfg = Config("alembic.ini")
+        # Also set the sqlalchemy.url option as a fallback
+        alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+
+        # Run the upgrade to head
+        command.upgrade(alembic_cfg, "head")
+    except Exception as e:
+        raise RuntimeError(f"Failed to upgrade schema: {e}") from e
+
+
 def table_exists(engine: Engine, table_name: str) -> bool:
     """
     Check if a specific table exists in the database.
