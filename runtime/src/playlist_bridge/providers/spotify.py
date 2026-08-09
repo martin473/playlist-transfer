@@ -1,8 +1,8 @@
 """Spotify provider utilities."""
 
-from typing import Protocol, Sequence
+from typing import Protocol, Sequence, List
 
-from playlist_bridge.domain.models import AccountProfile
+from playlist_bridge.domain.models import AccountProfile, SpotifyCandidate
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
     PermissionDenied,
@@ -40,6 +40,35 @@ class SpotifyAdapter(Protocol):
         Raises:
             AuthenticationRequired: If the user is not authenticated with Spotify.
             PermissionDenied: If the user lacks permission to view their profile.
+            ProviderNotFound: If the Spotify API endpoint is not available.
+            RateLimited: If the Spotify API rate limit has been exceeded.
+            InvalidProviderResponse: If the provider returns malformed data.
+            TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+            CancellationRequested: If the operation is cancelled via the token.
+        """
+        ...
+
+    def search_tracks(
+        self,
+        query: str,
+        *,
+        cancel: CancellationToken,
+        limit: int = 10,
+    ) -> List[SpotifyCandidate]:
+        """Search for tracks on Spotify by query string.
+
+        Args:
+            query: Search query string (track title, artist, album, etc.).
+            cancel: CancellationToken to check for cancellation requests.
+            limit: Maximum number of results to return. Defaults to 10.
+
+        Returns:
+            List of SpotifyCandidate objects matching the search query.
+            May be empty if no matches are found.
+
+        Raises:
+            AuthenticationRequired: If the user is not authenticated with Spotify.
+            PermissionDenied: If the user lacks permission to search.
             ProviderNotFound: If the Spotify API endpoint is not available.
             RateLimited: If the Spotify API rate limit has been exceeded.
             InvalidProviderResponse: If the provider returns malformed data.
