@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from spotipy import SpotifyPKCE
+from spotipy import Spotify, SpotifyPKCE
 from spotipy.oauth2 import SpotifyOauthError
 
 from playlist_bridge.credentials.store import KeyringCacheHandler
@@ -13,6 +13,8 @@ from playlist_bridge.providers.errors import (
     AuthenticationRequired,
     InvalidProviderResponse,
     PermissionDenied,
+    RateLimited,
+    TemporaryProviderFailure,
 )
 from playlist_bridge.settings import SpotifyOAuthSettings
 
@@ -168,10 +170,172 @@ def authenticate_spotify_profile(
                 operation="authenticate",
                 safe_message="User denied Spotify authorization",
             ) from e
+
+
+def probe_spotify_identity(client: Spotify) -> AccountProfile:
+    """Probe the identity of the authenticated Spotify user.
+
+    Args:
+        client: An authenticated Spotify client instance.
+
+    Returns:
+        AccountProfile: The account profile containing provider user ID and display name.
+
+    Raises:
+        AuthenticationRequired: If the client is not authenticated.
+        PermissionDenied: If the authenticated user lacks permission to access their profile.
+        RateLimited: If the Spotify API rate limit is exceeded.
+        InvalidProviderResponse: If Spotify returns an invalid or malformed response.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+    """
+    try:
+        # Get the current user's profile
+        user_info = client.me()
+
+        if not user_info:
+            raise InvalidProviderResponse(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Spotify returned empty user profile",
+            )
+
+        # Extract user information
+        account_id = user_info.get("id")
+        display_name = user_info.get("display_name") or user_info.get("id", "Unknown")
+
+        if not account_id:
+            raise InvalidProviderResponse(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Spotify user profile missing 'id' field",
+            )
+
+        # Return the account profile
+        return AccountProfile(
+            provider="spotify",
+            account_id=account_id,
+            display_name=display_name,
+            email=None,
+            username=user_info.get("display_name"),
+            profile_url=user_info.get("external_urls", {}).get("spotify"),
+        )
+
+    except SpotifyOauthError as e:
+        # Handle OAuth-specific errors
+        error_msg = str(e).lower()
+        if "access_denied" in error_msg:
+            raise PermissionDenied(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="User denied access to Spotify profile",
+            ) from e
+        elif "rate limit" in error_msg or "rate_limit" in error_msg:
+            raise RateLimited(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Spotify API rate limit exceeded",
+            ) from e
+        else:
+            raise AuthenticationRequired(
+                service="spotify",
+                operation="probe_identity",
+                safe_message=f"Spotify authentication failed: {e}",
+            ) from e
+    except Exception as e:
+        # Re-raise known error types
+        if isinstance(e, (AuthenticationRequired, PermissionDenied, RateLimited, InvalidProviderResponse, TemporaryProviderFailure)):
+            raise
+        # Handle other exceptions
+        raise TemporaryProviderFailure(
+            service="spotify",
+            operation="probe_identity",
+            safe_message=f"Spotify API temporarily unavailable: {e}",
+        ) from e
         raise AuthenticationRequired(
             service="spotify",
             operation="authenticate",
             safe_message=f"Spotify authentication failed: {e}",
+        ) from e
+
+
+def probe_spotify_identity(client: Spotify) -> AccountProfile:
+    """Probe the identity of the authenticated Spotify user.
+
+    Args:
+        client: An authenticated Spotify client instance.
+
+    Returns:
+        AccountProfile: The account profile containing provider user ID and display name.
+
+    Raises:
+        AuthenticationRequired: If the client is not authenticated.
+        PermissionDenied: If the authenticated user lacks permission to access their profile.
+        RateLimited: If the Spotify API rate limit is exceeded.
+        InvalidProviderResponse: If Spotify returns an invalid or malformed response.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+    """
+    try:
+        # Get the current user's profile
+        user_info = client.me()
+
+        if not user_info:
+            raise InvalidProviderResponse(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Spotify returned empty user profile",
+            )
+
+        # Extract user information
+        account_id = user_info.get("id")
+        display_name = user_info.get("display_name") or user_info.get("id", "Unknown")
+
+        if not account_id:
+            raise InvalidProviderResponse(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Spotify user profile missing 'id' field",
+            )
+
+        # Return the account profile
+        return AccountProfile(
+            provider="spotify",
+            account_id=account_id,
+            display_name=display_name,
+            email=None,
+            username=user_info.get("display_name"),
+            profile_url=user_info.get("external_urls", {}).get("spotify"),
+        )
+
+    except SpotifyOauthError as e:
+        # Handle OAuth-specific errors
+        error_msg = str(e).lower()
+        if "access_denied" in error_msg:
+            raise PermissionDenied(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="User denied access to Spotify profile",
+            ) from e
+        elif "rate limit" in error_msg or "rate_limit" in error_msg:
+            raise RateLimited(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Spotify API rate limit exceeded",
+            ) from e
+        else:
+            raise AuthenticationRequired(
+                service="spotify",
+                operation="probe_identity",
+                safe_message=f"Spotify authentication failed: {e}",
+            ) from e
+    except Exception as e:
+        # Re-raise known error types
+        if isinstance(e, (AuthenticationRequired, PermissionDenied, RateLimited, InvalidProviderResponse, TemporaryProviderFailure)):
+            raise
+        # Handle other exceptions
+        raise TemporaryProviderFailure(
+            service="spotify",
+            operation="probe_identity",
+            safe_message=f"Spotify API temporarily unavailable: {e}",
         ) from e
     except Exception as e:
         if isinstance(e, (AuthenticationRequired, PermissionDenied, InvalidProviderResponse)):
@@ -180,4 +344,85 @@ def authenticate_spotify_profile(
             service="spotify",
             operation="authenticate",
             safe_message=f"Spotify authentication failed: {e}",
+        ) from e
+
+
+def probe_spotify_identity(client: Spotify) -> AccountProfile:
+    """Probe the identity of the authenticated Spotify user.
+
+    Args:
+        client: An authenticated Spotify client instance.
+
+    Returns:
+        AccountProfile: The account profile containing provider user ID and display name.
+
+    Raises:
+        AuthenticationRequired: If the client is not authenticated.
+        PermissionDenied: If the authenticated user lacks permission to access their profile.
+        RateLimited: If the Spotify API rate limit is exceeded.
+        InvalidProviderResponse: If Spotify returns an invalid or malformed response.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+    """
+    try:
+        # Get the current user's profile
+        user_info = client.me()
+
+        if not user_info:
+            raise InvalidProviderResponse(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Spotify returned empty user profile",
+            )
+
+        # Extract user information
+        account_id = user_info.get("id")
+        display_name = user_info.get("display_name") or user_info.get("id", "Unknown")
+
+        if not account_id:
+            raise InvalidProviderResponse(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Spotify user profile missing 'id' field",
+            )
+
+        # Return the account profile
+        return AccountProfile(
+            provider="spotify",
+            account_id=account_id,
+            display_name=display_name,
+            email=None,
+            username=user_info.get("display_name"),
+            profile_url=user_info.get("external_urls", {}).get("spotify"),
+        )
+
+    except SpotifyOauthError as e:
+        # Handle OAuth-specific errors
+        error_msg = str(e).lower()
+        if "access_denied" in error_msg:
+            raise PermissionDenied(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="User denied access to Spotify profile",
+            ) from e
+        elif "rate limit" in error_msg or "rate_limit" in error_msg:
+            raise RateLimited(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Spotify API rate limit exceeded",
+            ) from e
+        else:
+            raise AuthenticationRequired(
+                service="spotify",
+                operation="probe_identity",
+                safe_message=f"Spotify authentication failed: {e}",
+            ) from e
+    except Exception as e:
+        # Re-raise known error types
+        if isinstance(e, (AuthenticationRequired, PermissionDenied, RateLimited, InvalidProviderResponse, TemporaryProviderFailure)):
+            raise
+        # Handle other exceptions
+        raise TemporaryProviderFailure(
+            service="spotify",
+            operation="probe_identity",
+            safe_message=f"Spotify API temporarily unavailable: {e}",
         ) from e

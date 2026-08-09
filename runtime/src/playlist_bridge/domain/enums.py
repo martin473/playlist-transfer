@@ -88,6 +88,7 @@ class TrackStatus(str, Enum):
     """Track-level states for individual source items.
 
     States:
+        AVAILABLE: Source item is available and can be matched.
         PENDING: Track not yet processed.
         MATCHING: Currently attempting to find a match.
         REVIEW: Match requires manual review.
@@ -98,6 +99,7 @@ class TrackStatus(str, Enum):
         FAILED: Processing failed with an error.
     """
 
+    AVAILABLE = "available"
     PENDING = "pending"
     MATCHING = "matching"
     REVIEW = "review"

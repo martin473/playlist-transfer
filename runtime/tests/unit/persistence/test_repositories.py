@@ -1,6 +1,6 @@
 """Unit tests for repository functions."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 
 import pytest
@@ -8,18 +8,24 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService, TransferMode
+from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService, TrackStatus, TransferMode
 from playlist_bridge.domain.models import MatchDecision, SourceTrack, TransferRequest
 from playlist_bridge.persistence.base import Base
 from playlist_bridge.persistence.models import JobRecord, ManualCorrection, MatchCacheEntry
 from playlist_bridge.persistence.repositories import (
     JobNotFoundError,
+    JobLease,
+    LeaseLostError,
     bulk_insert_source_tracks,
     create_job,
     get_job,
     get_source_tracks_ordered,
+    get_unresolved_decisions,
     lookup_match_cache,
     lookup_manual_correction,
+    record_job_error,
+    resolve_correction_then_cache,
+    update_job_checkpoint,
     update_job_state,
     upsert_manual_correction,
     upsert_match_cache,
@@ -1388,3 +1394,784 @@ class TestUpdateJobState:
             )
 
         assert exc_info.value.job_id == non_existent_job_id
+
+
+class TestUpdateJobCheckpoint:
+    """Tests for update_job_checkpoint function."""
+
+    def test_update_job_checkpoint_success(self, in_memory_session: Session):
+        """update_job_checkpoint successfully updates checkpoint fields."""
+        # Create a job first
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        job = create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+        assert job.state == "pending"
+        assert job.match_checkpoint == 0
+        assert job.write_checkpoint == 0
+        assert job.verification_checkpoint == 0
+
+        # Set up a lease
+        lease_holder = "worker-1"
+        lease_expires_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=30)
+        lease_heartbeat_at = datetime.now(timezone.utc).replace(microsecond=0)
+        lease = JobLease(
+            lease_holder=lease_holder,
+            lease_expires_at=lease_expires_at,
+            lease_heartbeat_at=lease_heartbeat_at,
+        )
+
+        # Set the lease on the job
+        job.lease_holder = lease_holder
+        job.lease_expires_at = lease_expires_at
+        job.lease_heartbeat_at = lease_heartbeat_at
+        in_memory_session.commit()
+
+        # Update checkpoint fields
+        updated_at = datetime.now(timezone.utc)
+        checkpoint_fields = {
+            "match_checkpoint": 10,
+            "write_checkpoint": 5,
+            "verification_checkpoint": 3,
+        }
+        updated_job = update_job_checkpoint(
+            session=in_memory_session,
+            job_id=job_id,
+            checkpoint_fields=checkpoint_fields,
+            updated_at=updated_at,
+            lease=lease,
+        )
+
+        # Verify the checkpoints were updated
+        assert updated_job.id == job_id
+        assert updated_job.match_checkpoint == 10
+        assert updated_job.write_checkpoint == 5
+        assert updated_job.verification_checkpoint == 3
+        assert updated_job.updated_at.replace(tzinfo=None) == updated_at.replace(tzinfo=None)
+        assert updated_job.lease_holder == lease_holder
+        assert updated_job.lease_expires_at.replace(tzinfo=None) == lease_expires_at.replace(tzinfo=None)
+        assert updated_job.lease_heartbeat_at.replace(tzinfo=None) == lease_heartbeat_at.replace(tzinfo=None)
+        assert updated_job.row_version == 2  # Incremented from 1
+
+        # Reload the job and verify the checkpoints persist
+        reloaded_job = get_job(in_memory_session, job_id)
+        assert reloaded_job is not None
+        assert reloaded_job.match_checkpoint == 10
+        assert reloaded_job.write_checkpoint == 5
+        assert reloaded_job.verification_checkpoint == 3
+
+    def test_update_job_checkpoint_partial_update(self, in_memory_session: Session):
+        """update_job_checkpoint updates only the specified checkpoint fields."""
+        # Create a job first
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        job = create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+        assert job.match_checkpoint == 0
+        assert job.write_checkpoint == 0
+        assert job.verification_checkpoint == 0
+
+        # Set up a lease
+        lease_holder = "worker-2"
+        lease_expires_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=30)
+        lease_heartbeat_at = datetime.now(timezone.utc).replace(microsecond=0)
+        lease = JobLease(
+            lease_holder=lease_holder,
+            lease_expires_at=lease_expires_at,
+            lease_heartbeat_at=lease_heartbeat_at,
+        )
+
+        # Set the lease on the job
+        job.lease_holder = lease_holder
+        job.lease_expires_at = lease_expires_at
+        job.lease_heartbeat_at = lease_heartbeat_at
+        in_memory_session.commit()
+
+        # Update only one checkpoint field
+        updated_at = datetime.now(timezone.utc)
+        checkpoint_fields = {
+            "match_checkpoint": 42,
+        }
+        updated_job = update_job_checkpoint(
+            session=in_memory_session,
+            job_id=job_id,
+            checkpoint_fields=checkpoint_fields,
+            updated_at=updated_at,
+            lease=lease,
+        )
+
+        # Verify only the specified field was updated
+        assert updated_job.match_checkpoint == 42
+        assert updated_job.write_checkpoint == 0  # Unchanged
+        assert updated_job.verification_checkpoint == 0  # Unchanged
+
+        # Reload and verify
+        reloaded_job = get_job(in_memory_session, job_id)
+        assert reloaded_job is not None
+        assert reloaded_job.match_checkpoint == 42
+        assert reloaded_job.write_checkpoint == 0
+        assert reloaded_job.verification_checkpoint == 0
+
+    def test_update_job_checkpoint_job_not_found(self, in_memory_session: Session):
+        """update_job_checkpoint raises JobNotFoundError when job doesn't exist."""
+        non_existent_job_id = "non-existent-job-id"
+        updated_at = datetime.now(timezone.utc)
+        lease = JobLease(
+            lease_holder="worker-1",
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+            lease_heartbeat_at=datetime.now(timezone.utc),
+        )
+
+        with pytest.raises(JobNotFoundError) as exc_info:
+            update_job_checkpoint(
+                session=in_memory_session,
+                job_id=non_existent_job_id,
+                checkpoint_fields={"match_checkpoint": 10},
+                updated_at=updated_at,
+                lease=lease,
+            )
+
+        assert exc_info.value.job_id == non_existent_job_id
+
+    def test_update_job_checkpoint_lease_lost_wrong_holder(self, in_memory_session: Session):
+        """update_job_checkpoint raises LeaseLostError when lease holder doesn't match."""
+        # Create a job
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        job = create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+
+        # Set a different lease holder
+        job.lease_holder = "worker-1"
+        job.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        job.lease_heartbeat_at = datetime.now(timezone.utc)
+        in_memory_session.commit()
+
+        # Try to update with a different lease holder
+        different_lease = JobLease(
+            lease_holder="worker-2",
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+            lease_heartbeat_at=datetime.now(timezone.utc),
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            update_job_checkpoint(
+                session=in_memory_session,
+                job_id=job_id,
+                checkpoint_fields={"match_checkpoint": 10},
+                updated_at=datetime.now(timezone.utc),
+                lease=different_lease,
+            )
+
+        assert exc_info.value.job_id == job_id
+
+    def test_update_job_checkpoint_lease_expired(self, in_memory_session: Session):
+        """update_job_checkpoint raises LeaseLostError when lease has expired."""
+        # Create a job
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        job = create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+
+        # Set an expired lease
+        lease_holder = "worker-1"
+        expired_time = datetime.now(timezone.utc) - timedelta(seconds=1)
+        job.lease_holder = lease_holder
+        job.lease_expires_at = expired_time
+        job.lease_heartbeat_at = expired_time - timedelta(seconds=5)
+        in_memory_session.commit()
+
+        # Try to update with the same holder but expired
+        lease = JobLease(
+            lease_holder=lease_holder,
+            lease_expires_at=expired_time,
+            lease_heartbeat_at=expired_time - timedelta(seconds=5),
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            update_job_checkpoint(
+                session=in_memory_session,
+                job_id=job_id,
+                checkpoint_fields={"match_checkpoint": 10},
+                updated_at=datetime.now(timezone.utc),
+                lease=lease,
+            )
+
+        assert exc_info.value.job_id == job_id
+
+    def test_update_job_checkpoint_invalid_field(self, in_memory_session: Session):
+        """update_job_checkpoint raises ValueError for invalid checkpoint fields."""
+        # Create a job
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        job = create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+
+        lease_holder = "worker-1"
+        job.lease_holder = lease_holder
+        job.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        job.lease_heartbeat_at = datetime.now(timezone.utc)
+        in_memory_session.commit()
+
+        lease = JobLease(
+            lease_holder=lease_holder,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+            lease_heartbeat_at=datetime.now(timezone.utc),
+        )
+
+        # Try to update an invalid field
+        with pytest.raises(ValueError) as exc_info:
+            update_job_checkpoint(
+                session=in_memory_session,
+                job_id=job_id,
+                checkpoint_fields={"invalid_field": 99},
+                updated_at=datetime.now(timezone.utc),
+                lease=lease,
+            )
+
+        assert "Invalid checkpoint field" in str(exc_info.value)
+        assert "match_checkpoint" in str(exc_info.value)
+        assert "write_checkpoint" in str(exc_info.value)
+        assert "verification_checkpoint" in str(exc_info.value)
+
+
+class TestGetUnresolvedDecisions:
+    """Tests for get_unresolved_decisions function."""
+
+    def test_get_unresolved_decisions_excludes_accepted_and_skipped(
+        self, in_memory_session: Session
+    ):
+        """Accepted and skipped decisions are excluded from unresolved results."""
+        # Create a job
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        job = create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+
+        # Insert source tracks with different positions
+        source_tracks = [
+            SourceTrack(
+                position=0,
+                title="Track 1",
+                artist_names=["Artist 1"],
+                duration_seconds=180,
+                video_id="video1",
+                channel_title="Channel 1",
+            ),
+            SourceTrack(
+                position=1,
+                title="Track 2",
+                artist_names=["Artist 2"],
+                duration_seconds=200,
+                video_id="video2",
+                channel_title="Channel 2",
+            ),
+            SourceTrack(
+                position=2,
+                title="Track 3",
+                artist_names=["Artist 3"],
+                duration_seconds=220,
+                video_id="video3",
+                channel_title="Channel 3",
+            ),
+            SourceTrack(
+                position=3,
+                title="Track 4",
+                artist_names=["Artist 4"],
+                duration_seconds=240,
+                video_id="video4",
+                channel_title="Channel 4",
+            ),
+            SourceTrack(
+                position=4,
+                title="Track 5",
+                artist_names=["Artist 5"],
+                duration_seconds=260,
+                video_id="video5",
+                channel_title="Channel 5",
+            ),
+        ]
+        bulk_insert_source_tracks(in_memory_session, job_id, source_tracks)
+
+        # Insert match decisions with various statuses
+        # video1: accepted (excluded)
+        # video2: skipped (excluded)
+        # video3: pending (included)
+        # video4: review (included)
+        # video5: unmatched (included)
+
+        decisions = [
+            MatchDecision(
+                source_item_id="video1",
+                destination_uri="spotify:track:track1",
+                destination_track_id="track1",
+                destination_title="Track 1",
+                destination_artist_names=["Artist 1"],
+                score=0.95,
+                decision_type="accepted",
+                confidence=0.9,
+            ),
+            MatchDecision(
+                source_item_id="video2",
+                destination_uri="spotify:track:track2",
+                destination_track_id="track2",
+                destination_title="Track 2",
+                destination_artist_names=["Artist 2"],
+                score=0.0,
+                decision_type="skipped",
+                confidence=0.0,
+            ),
+            MatchDecision(
+                source_item_id="video3",
+                destination_uri="spotify:track:track3",
+                destination_track_id="track3",
+                destination_title="Track 3",
+                destination_artist_names=["Artist 3"],
+                score=0.0,
+                decision_type="pending",
+                confidence=0.0,
+            ),
+            MatchDecision(
+                source_item_id="video4",
+                destination_uri="spotify:track:track4",
+                destination_track_id="track4",
+                destination_title="Track 4",
+                destination_artist_names=["Artist 4"],
+                score=0.75,
+                decision_type="review",
+                confidence=0.7,
+            ),
+            MatchDecision(
+                source_item_id="video5",
+                destination_uri="spotify:track:unmatched",
+                destination_track_id="unmatched",
+                destination_title="No Match Found",
+                destination_artist_names=["Unknown"],
+                score=0.0,
+                decision_type="unmatched",
+                confidence=0.0,
+            ),
+        ]
+
+        # Upsert each decision
+        for decision in decisions:
+            upsert_match_decision(in_memory_session, job_id, decision)
+
+        # Get unresolved decisions
+        unresolved = get_unresolved_decisions(in_memory_session, job_id)
+
+        # Should only include video3 (pending), video4 (review), video5 (unmatched)
+        # in source order (by position)
+        assert len(unresolved) == 3
+
+        # Check order by position: video3 (position 2), video4 (position 3), video5 (position 4)
+        assert unresolved[0].source_item_id == "video3"
+        assert unresolved[0].decision_type == "pending"
+        assert unresolved[1].source_item_id == "video4"
+        assert unresolved[1].decision_type == "review"
+        assert unresolved[2].source_item_id == "video5"
+        assert unresolved[2].decision_type == "unmatched"
+
+        # Verify excluded decisions are not in results
+        source_item_ids = [d.source_item_id for d in unresolved]
+        assert "video1" not in source_item_ids  # accepted
+        assert "video2" not in source_item_ids  # skipped
+
+    def test_get_unresolved_decisions_job_not_found(self, in_memory_session: Session):
+        """get_unresolved_decisions raises JobNotFoundError for non-existent job."""
+        with pytest.raises(JobNotFoundError) as exc_info:
+            get_unresolved_decisions(in_memory_session, "non-existent-job-id")
+
+        assert exc_info.value.job_id == "non-existent-job-id"
+
+    def test_get_unresolved_decisions_empty_job(self, in_memory_session: Session):
+        """get_unresolved_decisions returns empty list for job with no decisions."""
+        # Create a job with no source tracks or decisions
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+
+        # No source tracks, no decisions
+        unresolved = get_unresolved_decisions(in_memory_session, job_id)
+        assert unresolved == []
+
+
+class TestResolveCorrectionThenCache:
+    """Tests for resolve_correction_then_cache function."""
+
+    def test_resolve_returns_manual_correction_first(self, in_memory_session: Session):
+        """Manual corrections are returned before automatic cache entries for the same fingerprint."""
+        fingerprint = "test-fingerprint-123"
+
+        # Create and insert a manual correction
+        correction = ManualCorrection(
+            source_fingerprint=fingerprint,
+            spotify_track_id="spotify:track:manual123",
+            origin="manual_override",
+            explanation="Manual override for test",
+        )
+        in_memory_session.add(correction)
+
+        # Create and insert an automatic cache entry with the same fingerprint
+        cache_entry = MatchCacheEntry(
+            source_fingerprint=fingerprint,
+            spotify_track_id="spotify:track:auto456",
+            confidence=80,
+            origin="auto",
+            last_verified_at=datetime.now(timezone.utc),
+        )
+        in_memory_session.add(cache_entry)
+        in_memory_session.commit()
+
+        # Resolve - should return manual correction first
+        result = resolve_correction_then_cache(in_memory_session, fingerprint)
+
+        assert result is not None
+        assert isinstance(result, ManualCorrection)
+        assert result.source_fingerprint == fingerprint
+        assert result.spotify_track_id == "spotify:track:manual123"
+        assert result.origin == "manual_override"
+
+    def test_resolve_returns_cache_entry_when_no_correction(self, in_memory_session: Session):
+        """When no manual correction exists, returns the automatic cache entry."""
+        fingerprint = "test-fingerprint-456"
+
+        # Create and insert only an automatic cache entry
+        cache_entry = MatchCacheEntry(
+            source_fingerprint=fingerprint,
+            spotify_track_id="spotify:track:auto789",
+            confidence=75,
+            origin="auto",
+            last_verified_at=datetime.now(timezone.utc),
+        )
+        in_memory_session.add(cache_entry)
+        in_memory_session.commit()
+
+        # Resolve - should return cache entry
+        result = resolve_correction_then_cache(in_memory_session, fingerprint)
+
+        assert result is not None
+        assert isinstance(result, MatchCacheEntry)
+        assert result.source_fingerprint == fingerprint
+        assert result.spotify_track_id == "spotify:track:auto789"
+        assert result.confidence == 75
+        assert result.origin == "auto"
+
+    def test_resolve_returns_none_when_neither_exists(self, in_memory_session: Session):
+        """When neither manual correction nor cache entry exists, returns None."""
+        fingerprint = "non-existent-fingerprint"
+
+        result = resolve_correction_then_cache(in_memory_session, fingerprint)
+
+        assert result is None
+
+    def test_resolve_ignores_cache_when_correction_exists(self, in_memory_session: Session):
+        """When both exist, correction is returned and cache is ignored."""
+        fingerprint = "test-fingerprint-789"
+
+        # Insert manual correction
+        correction = ManualCorrection(
+            source_fingerprint=fingerprint,
+            spotify_track_id="spotify:track:manual999",
+            origin="manual",
+            explanation="User provided correction",
+        )
+        in_memory_session.add(correction)
+
+        # Insert cache entry with different data
+        cache_entry = MatchCacheEntry(
+            source_fingerprint=fingerprint,
+            spotify_track_id="spotify:track:auto111",
+            confidence=50,
+            origin="auto",
+            last_verified_at=datetime.now(timezone.utc),
+        )
+        in_memory_session.add(cache_entry)
+        in_memory_session.commit()
+
+        # Resolve - should return correction
+        result = resolve_correction_then_cache(in_memory_session, fingerprint)
+
+        assert result is not None
+        assert isinstance(result, ManualCorrection)
+        # Verify it's the correction, not the cache entry
+        assert result.spotify_track_id == "spotify:track:manual999"
+        assert result.origin == "manual"
+
+
+class TestRecordJobError:
+    """Tests for record_job_error function."""
+
+    def test_record_job_error_updates_job(self, in_memory_session: Session):
+        """record_job_error stores a safe error summary on the job."""
+        # Create a job first
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+        )
+        create_job(in_memory_session, request, job_id, created_at)
+
+        # Record an error
+        updated_at = datetime.now(timezone.utc)
+        safe_code = "SPOTIFY_404"
+        safe_message = "Playlist not found"
+
+        result = record_job_error(
+            in_memory_session,
+            job_id,
+            safe_code,
+            safe_message,
+            updated_at,
+        )
+
+        # Verify the job was updated
+        assert result.id == job_id
+        assert result.last_error == "[SPOTIFY_404] Playlist not found"
+        assert result.updated_at == updated_at
+
+        # Reload the job and verify the error persists
+        reloaded = get_job(in_memory_session, job_id)
+        assert reloaded is not None
+        assert reloaded.last_error == "[SPOTIFY_404] Playlist not found"
+
+    def test_record_job_error_raises_job_not_found(self, in_memory_session: Session):
+        """record_job_error raises JobNotFoundError for non-existent job."""
+        job_id = "non-existent-job-id"
+        updated_at = datetime.now(timezone.utc)
+
+        with pytest.raises(JobNotFoundError) as exc_info:
+            record_job_error(
+                in_memory_session,
+                job_id,
+                "TEST_ERROR",
+                "Some error message",
+                updated_at,
+            )
+
+        assert exc_info.value.job_id == job_id
+
+    def test_record_job_error_raises_value_error_empty_code(self, in_memory_session: Session):
+        """record_job_error raises ValueError when safe_code is empty."""
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+        )
+        create_job(in_memory_session, request, job_id, created_at)
+        updated_at = datetime.now(timezone.utc)
+
+        with pytest.raises(ValueError) as exc_info:
+            record_job_error(
+                in_memory_session,
+                job_id,
+                "",
+                "Some error message",
+                updated_at,
+            )
+        assert "safe_code cannot be empty" in str(exc_info.value)
+
+    def test_record_job_error_raises_value_error_empty_message(self, in_memory_session: Session):
+        """record_job_error raises ValueError when safe_message is empty."""
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+        )
+        create_job(in_memory_session, request, job_id, created_at)
+        updated_at = datetime.now(timezone.utc)
+
+        with pytest.raises(ValueError) as exc_info:
+            record_job_error(
+                in_memory_session,
+                job_id,
+                "TEST_ERROR",
+                "",
+                updated_at,
+            )
+        assert "safe_message cannot be empty" in str(exc_info.value)
+
+    def test_record_job_error_rejects_credential_patterns(self, in_memory_session: Session):
+        """record_job_error raises ValueError when safe_message contains credential-like text."""
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+        )
+        create_job(in_memory_session, request, job_id, created_at)
+        updated_at = datetime.now(timezone.utc)
+
+        # Test with a credential-like pattern
+        with pytest.raises(ValueError) as exc_info:
+            record_job_error(
+                in_memory_session,
+                job_id,
+                "AUTH_ERROR",
+                "Invalid API key: abc123",
+                updated_at,
+            )
+        assert "credential-like pattern" in str(exc_info.value)
+
+    def test_record_job_error_accepts_safe_messages_without_credentials(
+        self, in_memory_session: Session
+    ):
+        """record_job_error accepts messages that don't contain credential-like text."""
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+        )
+        create_job(in_memory_session, request, job_id, created_at)
+        updated_at = datetime.now(timezone.utc)
+
+        safe_code = "YOUTUBE_404"
+        safe_message = "Video unavailable or removed"
+
+        result = record_job_error(
+            in_memory_session,
+            job_id,
+            safe_code,
+            safe_message,
+            updated_at,
+        )
+
+        assert result.last_error == "[YOUTUBE_404] Video unavailable or removed"
+
+    def test_record_job_error_multiple_errors(self, in_memory_session: Session):
+        """record_job_error can be called multiple times, updating the error each time."""
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+        )
+        create_job(in_memory_session, request, job_id, created_at)
+
+        # First error
+        updated_at1 = datetime.now(timezone.utc)
+        record_job_error(
+            in_memory_session,
+            job_id,
+            "SPOTIFY_404",
+            "Playlist not found",
+            updated_at1,
+        )
+
+        # Second error (overwrites first)
+        updated_at2 = datetime.now(timezone.utc)
+        result = record_job_error(
+            in_memory_session,
+            job_id,
+            "SPOTIFY_RATE_LIMIT",
+            "Rate limit exceeded",
+            updated_at2,
+        )
+
+        assert result.last_error == "[SPOTIFY_RATE_LIMIT] Rate limit exceeded"
+        assert result.updated_at == updated_at2
+
+        # Reload and verify only the latest error is stored
+        reloaded = get_job(in_memory_session, job_id)
+        assert reloaded is not None
+        assert reloaded.last_error == "[SPOTIFY_RATE_LIMIT] Rate limit exceeded"

@@ -2,9 +2,10 @@
 
 import json
 import uuid
-from typing import TextIO, Union
+from typing import NamedTuple, Sequence, TextIO, Union
 
 from playlist_bridge.domain.events import JobEvent, JobEventAdapter
+from playlist_bridge.domain.models import SourceTrack, MatchDecision
 
 
 def new_job_id() -> str:
@@ -89,3 +90,221 @@ class JsonlEventEmitter:
             self._stream.flush()
         except (OSError, ValueError) as e:
             raise OSError(f"Failed to emit JSONL event: {e}") from e
+
+
+class TransferCounts(NamedTuple):
+    """Counts of transfer decisions."""
+    matched: int
+    ambiguous: int
+    unmatched: int
+    unavailable: int
+    skipped: int
+    non_track: int
+
+
+def calculate_transfer_counts(
+    tracks: Sequence[SourceTrack],
+    decisions: Sequence[MatchDecision],
+) -> TransferCounts:
+    """Calculate counts of matched, ambiguous, unmatched, unavailable, skipped, and non-track items.
+
+    This function counts source tracks by their decision type and availability status,
+    returning a TransferCounts tuple. Matched tracks are those with accepted decisions.
+    Non-track items are those with decision_type "non_track".
+
+    Args:
+        tracks: Sequence of SourceTrack objects in source playlist order.
+        decisions: Sequence of MatchDecision objects for the tracks.
+
+    Returns:
+        TransferCounts tuple with counts for each category.
+
+    Raises:
+        ValueError: If tracks or decisions are invalid.
+
+    Examples:
+        >>> track1 = SourceTrack(
+        ...     position=0,
+        ...     title="Song 1",
+        ...     artist_names=["Artist 1"],
+        ...     duration_seconds=180,
+        ...     video_id="abc123",
+        ...     availability="available",
+        ... )
+        >>> decision1 = MatchDecision(
+        ...     source_item_id="abc123",
+        ...     destination_uri="spotify:track:xyz789",
+        ...     destination_track_id="xyz789",
+        ...     destination_title="Song 1",
+        ...     destination_artist_names=["Artist 1"],
+        ...     score=0.95,
+        ...     decision_type="accepted",
+        ...     confidence=0.9,
+        ... )
+        >>> counts = calculate_transfer_counts([track1], [decision1])
+        >>> counts.matched
+        1
+        >>> counts.unmatched
+        0
+    """
+    # Build lookup from source_item_id to decision
+    decision_lookup: dict[str, MatchDecision] = {}
+    for decision in decisions:
+        if decision.source_item_id in decision_lookup:
+            # Duplicate decisions for same source item - keep the first one
+            continue
+        decision_lookup[decision.source_item_id] = decision
+
+    matched = 0
+    ambiguous = 0
+    unmatched = 0
+    unavailable = 0
+    skipped = 0
+    non_track = 0
+
+    for track in tracks:
+        source_id = track.video_id
+        decision = decision_lookup.get(source_id)
+
+        # Check availability
+        avail = track.availability
+        if hasattr(avail, "value"):
+            avail = avail.value
+
+        if avail == "unavailable":
+            unavailable += 1
+            continue
+
+        if decision is None:
+            unmatched += 1
+            continue
+
+        decision_type = decision.decision_type.lower()
+
+        if decision_type == "accepted":
+            matched += 1
+        elif decision_type == "ambiguous":
+            ambiguous += 1
+        elif decision_type == "skipped":
+            skipped += 1
+        elif decision_type == "non_track":
+            non_track += 1
+        elif decision_type in ("unmatched", "review", "rejected"):
+            # review and rejected are counted as unmatched for transfer purposes
+            unmatched += 1
+        else:
+            # Unknown decision type - count as unmatched
+            unmatched += 1
+
+    return TransferCounts(
+        matched=matched,
+        ambiguous=ambiguous,
+        unmatched=unmatched,
+        unavailable=unavailable,
+        skipped=skipped,
+        non_track=non_track,
+    )
+
+
+def accepted_uris_in_source_order(
+    tracks: Sequence[SourceTrack],
+    decisions: Sequence[MatchDecision],
+) -> list[str]:
+    """Return accepted Spotify URIs in source position order.
+
+    This function filters source tracks by their match decisions, returning only
+    accepted tracks (those with decision_type == "accepted") while excluding
+    unavailable, skipped, ambiguous, and unmatched items. The results maintain
+    the original source playlist order, and duplicate source items remain
+    duplicated unless a later explicit deduplication option is enabled.
+
+    Args:
+        tracks: Sequence of SourceTrack objects in source playlist order.
+        decisions: Sequence of MatchDecision objects for the tracks.
+
+    Returns:
+        List of Spotify URIs for accepted tracks, in source position order.
+
+    Raises:
+        ValueError: If tracks or decisions are invalid (e.g., mismatched).
+
+    Examples:
+        >>> track1 = SourceTrack(
+        ...     position=0,
+        ...     title="Song 1",
+        ...     artist_names=["Artist 1"],
+        ...     duration_seconds=180,
+        ...     video_id="abc123",
+        ...     availability="available",
+        ... )
+        >>> track2 = SourceTrack(
+        ...     position=1,
+        ...     title="Song 2",
+        ...     artist_names=["Artist 2"],
+        ...     duration_seconds=200,
+        ...     video_id="def456",
+        ...     availability="available",
+        ... )
+        >>> decision1 = MatchDecision(
+        ...     source_item_id="abc123",
+        ...     destination_uri="spotify:track:xyz789",
+        ...     destination_track_id="xyz789",
+        ...     destination_title="Song 1",
+        ...     destination_artist_names=["Artist 1"],
+        ...     score=0.95,
+        ...     decision_type="accepted",
+        ...     confidence=0.9,
+        ... )
+        >>> decision2 = MatchDecision(
+        ...     source_item_id="def456",
+        ...     destination_uri="spotify:track:uvw456",
+        ...     destination_track_id="uvw456",
+        ...     destination_title="Song 2",
+        ...     destination_artist_names=["Artist 2"],
+        ...     score=0.3,
+        ...     decision_type="unmatched",
+        ...     confidence=0.2,
+        ... )
+        >>> accepted_uris_in_source_order([track1, track2], [decision1, decision2])
+        ['spotify:track:xyz789']
+    """
+    from typing import Sequence
+
+    # Build lookup from source_item_id to decision
+    decision_lookup: dict[str, MatchDecision] = {}
+    for decision in decisions:
+        if decision.source_item_id in decision_lookup:
+            # Duplicate decisions for same source item - keep the first one
+            # or raise? The spec says duplicates remain duplicated
+            # For lookup, we need to handle multiple decisions per track
+            # This shouldn't happen in normal operation
+            continue
+        decision_lookup[decision.source_item_id] = decision
+
+    # Iterate through tracks in source order
+    result: list[str] = []
+    for track in tracks:
+        # Use video_id as the source_item_id
+        source_id = track.video_id
+        decision = decision_lookup.get(source_id)
+
+        # If no decision found, skip this track (unmatched)
+        if decision is None:
+            continue
+
+        # Skip unavailable tracks regardless of decision
+        # availability might be a TrackStatus enum or a string
+        avail = track.availability
+        if hasattr(avail, "value"):
+            avail = avail.value
+        if avail == "unavailable":
+            continue
+
+        # Check if the decision is accepted
+        # Accepted means decision_type == "accepted"
+        if decision.decision_type.lower() == "accepted":
+            result.append(decision.destination_uri)
+        # Otherwise skip: unavailable, skipped, ambiguous, unmatched
+        # The decision_type values indicate these states
+
+    return result

@@ -4,7 +4,7 @@ from typing import Optional, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from playlist_bridge.domain.enums import MatchPolicy, TransferMode
+from playlist_bridge.domain.enums import MatchPolicy, TransferMode, TrackStatus
 
 
 class SpotifyCandidate(BaseModel):
@@ -93,6 +93,7 @@ class SourceTrack(BaseModel):
         duration_seconds: Track duration in seconds.
         video_id: Source video ID (e.g., YouTube video ID).
         channel_title: Optional channel title of the uploader.
+        availability: Availability state of the track (available, unavailable, etc.).
     """
 
     model_config = {"extra": "forbid"}
@@ -105,6 +106,10 @@ class SourceTrack(BaseModel):
     channel_title: Optional[str] = Field(
         default=None,
         description="Optional channel title of the uploader",
+    )
+    availability: "TrackStatus" = Field(
+        default="available",
+        description="Availability state of the track",
     )
 
     @field_validator("title")

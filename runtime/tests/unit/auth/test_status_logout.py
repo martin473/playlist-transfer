@@ -530,3 +530,339 @@ class TestAuthStatus:
                 profile_name="test",
                 state="invalid_state",  # type: ignore[arg-type]
             )
+
+
+class TestProbeSpotifyAuthStatus:
+    """Tests for probe_spotify_auth_status function."""
+
+    def test_probe_spotify_auth_status_missing_credentials(self) -> None:
+        """Test that missing credentials returns 'missing' status."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import DestinationService
+        from unittest.mock import MagicMock
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = None
+
+        result = probe_spotify_auth_status(
+            profile_name="test-profile",
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        assert isinstance(result, AuthStatus)
+        assert result.service == DestinationService.SPOTIFY
+        assert result.profile_name == "test-profile"
+        assert result.state == "missing"
+        assert result.safe_message == "No Spotify credentials found for this profile"
+        assert result.provider_user_id is None
+        assert result.display_name is None
+
+    def test_probe_spotify_auth_status_authenticated(self) -> None:
+        """Test that valid credentials return 'authenticated' status."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import DestinationService
+        from unittest.mock import MagicMock, patch
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "access_token": "valid-token",
+            "refresh_token": "refresh-token",
+        }
+
+        # Mock the Spotify client and probe_spotify_identity
+        with patch("playlist_bridge.auth.spotify.probe_spotify_identity") as mock_probe:
+            mock_profile = MagicMock()
+            mock_profile.account_id = "user-123"
+            mock_profile.display_name = "Test User"
+            mock_probe.return_value = mock_profile
+
+            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+                mock_client = MagicMock()
+                mock_spotify.return_value = mock_client
+
+                result = probe_spotify_auth_status(
+                    profile_name="test-profile",
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                )
+
+                assert isinstance(result, AuthStatus)
+                assert result.service == DestinationService.SPOTIFY
+                assert result.profile_name == "test-profile"
+                assert result.state == "authenticated"
+                assert result.provider_user_id == "user-123"
+                assert result.display_name == "Test User"
+                assert result.safe_message == "Spotify authentication successful"
+
+    def test_probe_spotify_auth_status_expired_refreshable(self) -> None:
+        """Test that expired token with refresh returns 'expired_refreshable' status."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import DestinationService
+        from playlist_bridge.providers.errors import AuthenticationRequired
+        from unittest.mock import MagicMock, patch
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "access_token": "expired-token",
+            "refresh_token": "valid-refresh-token",
+        }
+
+        # Mock the Spotify client to raise AuthenticationRequired
+        with patch("playlist_bridge.auth.spotify.probe_spotify_identity") as mock_probe:
+            mock_probe.side_effect = AuthenticationRequired(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Token expired",
+            )
+
+            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+                mock_client = MagicMock()
+                mock_spotify.return_value = mock_client
+
+                result = probe_spotify_auth_status(
+                    profile_name="test-profile",
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                )
+
+                assert isinstance(result, AuthStatus)
+                assert result.service == DestinationService.SPOTIFY
+                assert result.profile_name == "test-profile"
+                assert result.state == "expired_refreshable"
+                assert result.safe_message == "Token expired"
+                assert result.provider_user_id is None
+                assert result.display_name is None
+
+    def test_probe_spotify_auth_status_invalid_no_access_token(self) -> None:
+        """Test that credentials without access token but with refresh return 'expired_refreshable' status."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import DestinationService
+        from unittest.mock import MagicMock
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "refresh_token": "refresh-token",
+        }
+
+        result = probe_spotify_auth_status(
+            profile_name="test-profile",
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        assert isinstance(result, AuthStatus)
+        assert result.service == DestinationService.SPOTIFY
+        assert result.profile_name == "test-profile"
+        assert result.state == "expired_refreshable"
+        assert result.safe_message == "Spotify access token missing but refresh token available"
+        assert result.provider_user_id is None
+        assert result.display_name is None
+
+    def test_probe_spotify_auth_status_invalid_no_refresh(self) -> None:
+        """Test that invalid credentials without refresh return 'invalid' status."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import DestinationService
+        from playlist_bridge.providers.errors import AuthenticationRequired
+        from unittest.mock import MagicMock, patch
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "access_token": "invalid-token",
+        }
+
+        # Mock the Spotify client to raise AuthenticationRequired
+        with patch("playlist_bridge.auth.spotify.probe_spotify_identity") as mock_probe:
+            mock_probe.side_effect = AuthenticationRequired(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Invalid token",
+            )
+
+            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+                mock_client = MagicMock()
+                mock_spotify.Spotify.return_value = mock_client
+
+                result = probe_spotify_auth_status(
+                    profile_name="test-profile",
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                )
+
+                assert isinstance(result, AuthStatus)
+                assert result.service == DestinationService.SPOTIFY
+                assert result.profile_name == "test-profile"
+                assert result.state == "invalid"
+                assert result.safe_message == "Invalid token"
+                assert result.provider_user_id is None
+                assert result.display_name is None
+
+    def test_probe_spotify_auth_status_corruption_error(self) -> None:
+        """Test that CredentialCorruptionError is raised when credentials are corrupted."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status
+        from playlist_bridge.ports import CredentialCorruptionError
+        from unittest.mock import MagicMock
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.side_effect = CredentialCorruptionError(
+            service="spotify",
+            profile_name="test-profile",
+            safe_message="Corrupted token data",
+        )
+
+        with pytest.raises(CredentialCorruptionError) as exc_info:
+            probe_spotify_auth_status(
+                profile_name="test-profile",
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+        assert exc_info.value.service == "spotify"
+        assert exc_info.value.profile_name == "test-profile"
+        assert "Corrupted token data" in str(exc_info.value)
+
+    def test_probe_spotify_auth_status_permission_denied_with_refresh(self) -> None:
+        """Test that PermissionDenied with refresh token returns 'expired_refreshable'."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import DestinationService
+        from playlist_bridge.providers.errors import PermissionDenied
+        from unittest.mock import MagicMock, patch
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "access_token": "token",
+            "refresh_token": "refresh-token",
+        }
+
+        with patch("playlist_bridge.auth.spotify.probe_spotify_identity") as mock_probe:
+            mock_probe.side_effect = PermissionDenied(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Access denied",
+            )
+
+            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+                mock_client = MagicMock()
+                mock_spotify.return_value = mock_client
+
+                result = probe_spotify_auth_status(
+                    profile_name="test-profile",
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                )
+
+                assert result.state == "expired_refreshable"
+                assert "Access denied" in result.safe_message
+
+    def test_probe_spotify_auth_status_permission_denied_no_refresh(self) -> None:
+        """Test that PermissionDenied without refresh token returns 'invalid'."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import DestinationService
+        from playlist_bridge.providers.errors import PermissionDenied
+        from unittest.mock import MagicMock, patch
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "access_token": "token",
+        }
+
+        with patch("playlist_bridge.auth.spotify.probe_spotify_identity") as mock_probe:
+            mock_probe.side_effect = PermissionDenied(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Access denied",
+            )
+
+            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+                mock_client = MagicMock()
+                mock_spotify.return_value = mock_client
+
+                result = probe_spotify_auth_status(
+                    profile_name="test-profile",
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                )
+
+                assert result.state == "invalid"
+                assert "Access denied" in result.safe_message
+
+    def test_probe_spotify_auth_status_rate_limited_with_refresh(self) -> None:
+        """Test that RateLimited with refresh token returns 'expired_refreshable'."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import DestinationService
+        from playlist_bridge.providers.errors import RateLimited
+        from unittest.mock import MagicMock, patch
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "access_token": "token",
+            "refresh_token": "refresh-token",
+        }
+
+        with patch("playlist_bridge.auth.spotify.probe_spotify_identity") as mock_probe:
+            mock_probe.side_effect = RateLimited(
+                service="spotify",
+                operation="probe_identity",
+                safe_message="Rate limit exceeded",
+            )
+
+            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+                mock_client = MagicMock()
+                mock_spotify.return_value = mock_client
+
+                result = probe_spotify_auth_status(
+                    profile_name="test-profile",
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                )
+
+                assert result.state == "expired_refreshable"
+                assert "Rate limit exceeded" in result.safe_message
+
+    def test_probe_spotify_auth_status_unexpected_error(self) -> None:
+        """Test that unexpected errors return 'invalid' status."""
+        from playlist_bridge.auth.status import probe_spotify_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import DestinationService
+        from unittest.mock import MagicMock, patch
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "access_token": "token",
+            "refresh_token": "refresh-token",
+        }
+
+        with patch("playlist_bridge.auth.spotify.probe_spotify_identity") as mock_probe:
+            mock_probe.side_effect = RuntimeError("Unexpected network error")
+
+            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+                mock_client = MagicMock()
+                mock_spotify.return_value = mock_client
+
+                result = probe_spotify_auth_status(
+                    profile_name="test-profile",
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                )
+
+                assert result.state == "invalid"
+                assert "Unexpected network error" in result.safe_message
