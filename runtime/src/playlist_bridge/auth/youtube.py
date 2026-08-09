@@ -6,6 +6,7 @@ from typing import Final, Sequence
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 
 from playlist_bridge.ports import CredentialCorruptionError
 from playlist_bridge.settings import GoogleOAuthSettings
@@ -656,3 +657,164 @@ def probe_youtube_identity(client) -> AccountProfile:
             operation="probe_identity",
             safe_message=f"YouTube API temporarily unavailable: {type(e).__name__}",
         ) from e
+
+
+def authenticate_youtube_profile(
+    profile_name: str,
+    settings: GoogleOAuthSettings,
+    profiles: AccountProfileRepository,
+    credentials: CredentialStore,
+    open_browser: bool = True,
+) -> AccountProfile:
+    """Authenticate a YouTube/Google profile using OAuth 2.0 with local server flow.
+
+    This function triggers the Google OAuth authorization flow using a local
+    redirect server. It stores the resulting credentials in the credential store
+    and saves the account profile information.
+
+    Args:
+        profile_name: The name of the profile to authenticate (e.g., "default").
+        settings: Google OAuth settings containing client_secret_path, scopes,
+            redirect_host, and redirect_port.
+        profiles: Repository for storing account profile information.
+        credentials: Credential store for OAuth token storage.
+        open_browser: Whether to open the browser automatically for authorization.
+            Defaults to True.
+
+    Returns:
+        AccountProfile: The authenticated account profile.
+
+    Raises:
+        AuthenticationRequired: If authentication fails or is incomplete.
+        PermissionDenied: If the user denies permission or lacks access.
+        InvalidProviderResponse: If Google/YouTube returns an invalid response.
+        ValueError: If settings or required arguments are invalid.
+
+    Side Effects:
+        official_oauth_browser: Opens the browser for user authorization.
+        os_keychain_write: Writes credentials to the keychain.
+        sqlite_profile_write: Saves the account profile to the database.
+    """
+    import json as json_module
+    from pathlib import Path
+
+    # Validate inputs
+    if not profile_name or not profile_name.strip():
+        raise ValueError("profile_name must not be empty")
+    if settings is None:
+        raise ValueError("settings must not be None")
+    if profiles is None:
+        raise ValueError("profiles repository must not be None")
+    if credentials is None:
+        raise ValueError("credentials store must not be None")
+
+    # Ensure the client secret file exists
+    if not settings.client_secret_path.exists():
+        raise ValueError(
+            f"Google client secret file not found: {settings.client_secret_path}"
+        )
+
+    try:
+        # Create the OAuth flow using the client secrets file
+        # Note: InstalledAppFlow.from_client_secrets_file expects the path as a string
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(settings.client_secret_path),
+            scopes=list(settings.scopes),
+            redirect_uri=f"http://{settings.redirect_host}:{settings.redirect_port}",
+        )
+
+        # Run the local server flow to get credentials
+        # This opens the browser and handles the redirect callback
+        creds = flow.run_local_server(
+            host=settings.redirect_host,
+            port=settings.redirect_port,
+            open_browser=open_browser,
+        )
+
+        if not creds:
+            raise AuthenticationRequired(
+                service="youtube",
+                operation="authenticate",
+                safe_message="Failed to obtain Google OAuth credentials",
+            )
+
+        # Save the credentials to the keychain
+        try:
+            serialized = serialize_google_credentials(creds)
+            payload = json_module.loads(serialized)
+            credentials.save(SourceService.YOUTUBE, profile_name, payload)
+        except (CredentialCorruptionError, json_module.JSONDecodeError) as e:
+            raise AuthenticationRequired(
+                service="youtube",
+                operation="authenticate",
+                safe_message=f"Failed to save credentials: {type(e).__name__}",
+            ) from e
+
+        # Probe the YouTube identity to get the user's channel info
+        # We need to create a YouTube API client with the credentials
+        try:
+            from googleapiclient.discovery import build
+
+            # Build the YouTube API client
+            youtube = build("youtube", "v3", credentials=creds)
+
+            # Get the authenticated user's channel
+            channel_profile = probe_youtube_identity(youtube)
+
+            # Use the profile name from the function argument
+            # The AccountProfile model expects service and provider_user_id fields
+            # We need to map the probe result to the correct schema
+            account_profile = AccountProfile(
+                profile_name=profile_name,
+                service="youtube",
+                provider_user_id=channel_profile.account_id,
+                display_name=channel_profile.display_name,
+            )
+
+            # Save the account profile
+            profiles.save(account_profile)
+
+            return account_profile
+
+        except ImportError as e:
+            raise AuthenticationRequired(
+                service="youtube",
+                operation="authenticate",
+                safe_message=f"Failed to build YouTube client: {type(e).__name__}",
+            ) from e
+        except (AuthenticationRequired, PermissionDenied, InvalidProviderResponse) as e:
+            # Re-raise known errors
+            raise
+        except Exception as e:
+            # Map other exceptions to appropriate domain errors
+            raise TemporaryProviderFailure(
+                service="youtube",
+                operation="authenticate",
+                safe_message=f"YouTube API temporarily unavailable: {type(e).__name__}",
+            ) from e
+
+    except AuthenticationRequired:
+        # Re-raise as-is
+        raise
+    except Exception as e:
+        # Handle known Google OAuth errors
+        error_msg = str(e).lower()
+        if "access_denied" in error_msg or "permission" in error_msg:
+            raise PermissionDenied(
+                service="youtube",
+                operation="authenticate",
+                safe_message="User denied permission for YouTube access",
+            ) from e
+        elif "invalid_client" in error_msg or "unauthorized" in error_msg:
+            raise AuthenticationRequired(
+                service="youtube",
+                operation="authenticate",
+                safe_message="Invalid Google client configuration",
+            ) from e
+        else:
+            # Map other exceptions to AuthenticationRequired or TemporaryProviderFailure
+            raise AuthenticationRequired(
+                service="youtube",
+                operation="authenticate",
+                safe_message=f"Authentication failed: {type(e).__name__}",
+            ) from e

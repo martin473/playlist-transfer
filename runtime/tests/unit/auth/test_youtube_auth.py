@@ -492,3 +492,289 @@ class TestRefreshGoogleCredentials:
                 # Should return the refreshed credentials
                 assert result is mock_creds
                 assert result.token == "new_refreshed_token"
+
+
+class TestAuthenticateYouTubeProfile:
+    """Tests for the authenticate_youtube_profile function."""
+
+    def test_authenticate_youtube_profile_success(self) -> None:
+        """Test that authenticate_youtube_profile successfully authenticates and stores credentials."""
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        from playlist_bridge.auth.youtube import authenticate_youtube_profile
+        from playlist_bridge.domain.models import AccountProfile
+        from playlist_bridge.domain.enums import SourceService
+        from playlist_bridge.settings import GoogleOAuthSettings
+
+        # Create a mock settings object
+        mock_settings = MagicMock(spec=GoogleOAuthSettings)
+        mock_settings.client_secret_path = MagicMock()
+        mock_settings.client_secret_path.exists.return_value = True
+        mock_settings.scopes = ("https://www.googleapis.com/auth/youtube",)
+        mock_settings.redirect_host = "localhost"
+        mock_settings.redirect_port = 8080
+
+        # Create mock repositories
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        # Create mock credentials
+        mock_creds = MagicMock(spec=Credentials)
+        mock_creds.token = "test_token_123"
+        mock_creds.refresh_token = "test_refresh_token"
+        mock_creds.token_uri = "https://oauth2.googleapis.com/token"
+        mock_creds.client_id = "test_client_id"
+        mock_creds.client_secret = "test_client_secret"
+        mock_creds.scopes = ["https://www.googleapis.com/auth/youtube"]
+
+        # Create a mock flow
+        mock_flow = MagicMock(spec=InstalledAppFlow)
+        mock_flow.run_local_server.return_value = mock_creds
+
+        # Create a mock YouTube client
+        mock_youtube = MagicMock()
+        mock_profile = AccountProfile(
+            profile_name="test-profile",
+            service="youtube",
+            provider_user_id="channel_123",
+            display_name="Test Channel",
+        )
+
+        with patch("playlist_bridge.auth.youtube.InstalledAppFlow.from_client_secrets_file", return_value=mock_flow):
+            with patch("playlist_bridge.auth.youtube.serialize_google_credentials", return_value=json.dumps({
+                "token": "test_token_123",
+                "refresh_token": "test_refresh_token",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "client_id": "test_client_id",
+                "client_secret": "test_client_secret",
+                "scopes": ["https://www.googleapis.com/auth/youtube"],
+            })):
+                with patch("playlist_bridge.auth.youtube.build") as mock_build:
+                    mock_build.return_value = mock_youtube
+                    with patch("playlist_bridge.auth.youtube.probe_youtube_identity", return_value=mock_profile):
+                        result = authenticate_youtube_profile(
+                            profile_name="test-profile",
+                            settings=mock_settings,
+                            profiles=mock_profiles,
+                            credentials=mock_credentials,
+                            open_browser=True,
+                        )
+
+                        # Verify the flow was created with the correct parameters
+                        mock_flow.run_local_server.assert_called_once_with(
+                            host="localhost",
+                            port=8080,
+                            open_browser=True,
+                        )
+
+                        # Verify credentials were saved
+                        mock_credentials.save.assert_called_once()
+                        call_args = mock_credentials.save.call_args
+                        assert call_args[0][0] == SourceService.YOUTUBE
+                        assert call_args[0][1] == "test-profile"
+                        payload = call_args[0][2]
+                        assert payload["token"] == "test_token_123"
+
+                        # Verify profile was saved
+                        mock_profiles.save.assert_called_once()
+                        saved_profile = mock_profiles.save.call_args[0][0]
+                        assert saved_profile.profile_name == "test-profile"
+                        assert saved_profile.service == "youtube"
+                        assert saved_profile.provider_user_id == "channel_123"
+                        assert saved_profile.display_name == "Test Channel"
+
+                        # Verify the result
+                        assert result is saved_profile
+
+    def test_authenticate_youtube_profile_missing_client_secret(self) -> None:
+        """Test that authenticate_youtube_profile raises ValueError when client secret is missing."""
+        from unittest.mock import MagicMock
+
+        from playlist_bridge.auth.youtube import authenticate_youtube_profile
+        from playlist_bridge.settings import GoogleOAuthSettings
+
+        mock_settings = MagicMock(spec=GoogleOAuthSettings)
+        mock_settings.client_secret_path = MagicMock()
+        mock_settings.client_secret_path.exists.return_value = False
+
+        with pytest.raises(ValueError, match="Google client secret file not found"):
+            authenticate_youtube_profile(
+                profile_name="test-profile",
+                settings=mock_settings,
+                profiles=MagicMock(),
+                credentials=MagicMock(),
+                open_browser=True,
+            )
+
+    def test_authenticate_youtube_profile_empty_profile_name(self) -> None:
+        """Test that authenticate_youtube_profile raises ValueError when profile_name is empty."""
+        from unittest.mock import MagicMock
+
+        from playlist_bridge.auth.youtube import authenticate_youtube_profile
+
+        with pytest.raises(ValueError, match="profile_name must not be empty"):
+            authenticate_youtube_profile(
+                profile_name="",
+                settings=MagicMock(),
+                profiles=MagicMock(),
+                credentials=MagicMock(),
+                open_browser=True,
+            )
+
+    def test_authenticate_youtube_profile_none_settings(self) -> None:
+        """Test that authenticate_youtube_profile raises ValueError when settings is None."""
+        from unittest.mock import MagicMock
+
+        from playlist_bridge.auth.youtube import authenticate_youtube_profile
+
+        with pytest.raises(ValueError, match="settings must not be None"):
+            authenticate_youtube_profile(
+                profile_name="test-profile",
+                settings=None,
+                profiles=MagicMock(),
+                credentials=MagicMock(),
+                open_browser=True,
+            )
+
+    def test_authenticate_youtube_profile_none_profiles(self) -> None:
+        """Test that authenticate_youtube_profile raises ValueError when profiles is None."""
+        from unittest.mock import MagicMock
+
+        from playlist_bridge.auth.youtube import authenticate_youtube_profile
+        from playlist_bridge.settings import GoogleOAuthSettings
+
+        mock_settings = MagicMock(spec=GoogleOAuthSettings)
+        mock_settings.client_secret_path = MagicMock()
+        mock_settings.client_secret_path.exists.return_value = True
+
+        with pytest.raises(ValueError, match="profiles repository must not be None"):
+            authenticate_youtube_profile(
+                profile_name="test-profile",
+                settings=mock_settings,
+                profiles=None,
+                credentials=MagicMock(),
+                open_browser=True,
+            )
+
+    def test_authenticate_youtube_profile_none_credentials(self) -> None:
+        """Test that authenticate_youtube_profile raises ValueError when credentials is None."""
+        from unittest.mock import MagicMock
+
+        from playlist_bridge.auth.youtube import authenticate_youtube_profile
+        from playlist_bridge.settings import GoogleOAuthSettings
+
+        mock_settings = MagicMock(spec=GoogleOAuthSettings)
+        mock_settings.client_secret_path = MagicMock()
+        mock_settings.client_secret_path.exists.return_value = True
+
+        with pytest.raises(ValueError, match="credentials store must not be None"):
+            authenticate_youtube_profile(
+                profile_name="test-profile",
+                settings=mock_settings,
+                profiles=MagicMock(),
+                credentials=None,
+                open_browser=True,
+            )
+
+    def test_authenticate_youtube_profile_flow_failure(self) -> None:
+        """Test that authenticate_youtube_profile raises AuthenticationRequired when flow fails."""
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        from playlist_bridge.auth.youtube import authenticate_youtube_profile
+        from playlist_bridge.settings import GoogleOAuthSettings
+
+        mock_settings = MagicMock(spec=GoogleOAuthSettings)
+        mock_settings.client_secret_path = MagicMock()
+        mock_settings.client_secret_path.exists.return_value = True
+        mock_settings.scopes = ("https://www.googleapis.com/auth/youtube",)
+        mock_settings.redirect_host = "localhost"
+        mock_settings.redirect_port = 8080
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        mock_flow = MagicMock(spec=InstalledAppFlow)
+        mock_flow.run_local_server.side_effect = Exception("OAuth flow failed")
+
+        with patch("playlist_bridge.auth.youtube.InstalledAppFlow.from_client_secrets_file", return_value=mock_flow):
+            with pytest.raises(AuthenticationRequired, match="Authentication failed"):
+                authenticate_youtube_profile(
+                    profile_name="test-profile",
+                    settings=mock_settings,
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                    open_browser=True,
+                )
+
+    def test_authenticate_youtube_profile_access_denied(self) -> None:
+        """Test that authenticate_youtube_profile raises PermissionDenied when user denies access."""
+        from unittest.mock import MagicMock, patch
+
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        from playlist_bridge.auth.youtube import authenticate_youtube_profile
+        from playlist_bridge.settings import GoogleOAuthSettings
+
+        mock_settings = MagicMock(spec=GoogleOAuthSettings)
+        mock_settings.client_secret_path = MagicMock()
+        mock_settings.client_secret_path.exists.return_value = True
+        mock_settings.scopes = ("https://www.googleapis.com/auth/youtube",)
+        mock_settings.redirect_host = "localhost"
+        mock_settings.redirect_port = 8080
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        mock_flow = MagicMock(spec=InstalledAppFlow)
+        # Simulate an access denied error
+        mock_flow.run_local_server.side_effect = Exception("access_denied")
+
+        with patch("playlist_bridge.auth.youtube.InstalledAppFlow.from_client_secrets_file", return_value=mock_flow):
+            with pytest.raises(PermissionDenied, match="User denied permission"):
+                authenticate_youtube_profile(
+                    profile_name="test-profile",
+                    settings=mock_settings,
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                    open_browser=True,
+                )
+
+    def test_authenticate_youtube_profile_invalid_client(self) -> None:
+        """Test that authenticate_youtube_profile raises AuthenticationRequired when client is invalid."""
+        from unittest.mock import MagicMock, patch
+
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        from playlist_bridge.auth.youtube import authenticate_youtube_profile
+        from playlist_bridge.settings import GoogleOAuthSettings
+
+        mock_settings = MagicMock(spec=GoogleOAuthSettings)
+        mock_settings.client_secret_path = MagicMock()
+        mock_settings.client_secret_path.exists.return_value = True
+        mock_settings.scopes = ("https://www.googleapis.com/auth/youtube",)
+        mock_settings.redirect_host = "localhost"
+        mock_settings.redirect_port = 8080
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        mock_flow = MagicMock(spec=InstalledAppFlow)
+        # Simulate an invalid client error
+        mock_flow.run_local_server.side_effect = Exception("invalid_client")
+
+        with patch("playlist_bridge.auth.youtube.InstalledAppFlow.from_client_secrets_file", return_value=mock_flow):
+            with pytest.raises(AuthenticationRequired, match="Invalid Google client configuration"):
+                authenticate_youtube_profile(
+                    profile_name="test-profile",
+                    settings=mock_settings,
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                    open_browser=True,
+                )
