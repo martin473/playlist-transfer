@@ -14,6 +14,7 @@ from playlist_bridge.persistence.migrations import (
     get_existing_tables,
     initialize_schema,
     table_exists,
+    upgrade_schema,
 )
 
 
@@ -396,3 +397,326 @@ class TestUpgradeSchema:
         assert "account_profiles" in tables
 
         engine.dispose()
+
+
+class TestMigrationIdempotence:
+    """Tests for migration idempotence - repeated upgrades are no-ops."""
+
+    def test_repeated_upgrade_is_noop(self, temp_db_path):
+        """Test that calling upgrade_schema multiple times is a no-op after the first."""
+        # Create an empty database file
+        temp_db_path.touch()
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+
+        # First upgrade
+        upgrade_schema(engine, temp_db_path)
+
+        # Capture state after first upgrade
+        inspector = inspect(engine)
+        tables_after_first = set(inspector.get_table_names())
+        tables_after_first.discard("alembic_version")
+
+        # Get schema details for comparison
+        schema_details_first = self._get_schema_details(engine)
+
+        # Second upgrade
+        upgrade_schema(engine, temp_db_path)
+
+        # Capture state after second upgrade
+        inspector = inspect(engine)
+        tables_after_second = set(inspector.get_table_names())
+        tables_after_second.discard("alembic_version")
+
+        # Tables should be identical
+        assert tables_after_first == tables_after_second
+
+        # Schema details should be identical
+        schema_details_second = self._get_schema_details(engine)
+        assert schema_details_first == schema_details_second
+
+        # Third upgrade (just to be thorough)
+        upgrade_schema(engine, temp_db_path)
+        inspector = inspect(engine)
+        tables_after_third = set(inspector.get_table_names())
+        tables_after_third.discard("alembic_version")
+        assert tables_after_second == tables_after_third
+
+        engine.dispose()
+
+    def _get_schema_details(self, engine):
+        """Get detailed schema information for comparison."""
+        inspector = inspect(engine)
+        details = {}
+        for table_name in inspector.get_table_names():
+            if table_name == "alembic_version":
+                continue
+            details[table_name] = {
+                "columns": sorted(
+                    [(c["name"], c["type"].__class__.__name__) for c in inspector.get_columns(table_name)]
+                ),
+                "foreign_keys": sorted(
+                    [(fk["constrained_columns"][0], fk["referred_table"]) for fk in inspector.get_foreign_keys(table_name)]
+                ),
+                "indexes": sorted(
+                    [idx["name"] for idx in inspector.get_indexes(table_name)]
+                ),
+                "unique_constraints": sorted(
+                    [uc["name"] for uc in inspector.get_unique_constraints(table_name)]
+                ),
+            }
+        return details
+
+    def test_repeated_upgrade_does_not_create_extra_backups(self, temp_db_path):
+        """Test that repeated upgrades on a non-empty database don't create extra backups unnecessarily."""
+        # Create a database with a table (simulating an existing database)
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+        with engine.connect() as conn:
+            conn.execute(text("CREATE TABLE test (id INTEGER)"))
+            conn.execute(text("INSERT INTO test VALUES (1)"))
+            conn.commit()
+        engine.dispose()
+
+        # First upgrade - should create a backup
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+        upgrade_schema(engine, temp_db_path)
+        engine.dispose()
+
+        # Count backups after first upgrade
+        backup_files_after_first = list(temp_db_path.parent.glob(f"{temp_db_path.stem}_backup_*.db"))
+        assert len(backup_files_after_first) == 1
+
+        # Second upgrade - should not create another backup if schema is already up to date
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+        upgrade_schema(engine, temp_db_path)
+        engine.dispose()
+
+        # Count backups after second upgrade - should still be 1
+        backup_files_after_second = list(temp_db_path.parent.glob(f"{temp_db_path.stem}_backup_*.db"))
+        assert len(backup_files_after_second) == 1
+
+        # Clean up backups
+        for backup in backup_files_after_second:
+            backup.unlink()
+
+
+class TestSchemaParity:
+    """Tests for schema parity between initialization and migration paths."""
+
+    def test_initialization_and_migration_produce_identical_schema(self, temp_db_path):
+        """Test that initialize_schema and upgrade_schema produce equivalent schemas."""
+        # Path A: Initialize schema using initialize_schema
+        init_db_path = temp_db_path.parent / f"{temp_db_path.stem}_init{temp_db_path.suffix}"
+        init_engine = create_engine(f"sqlite:///{init_db_path}")
+        initialize_schema(init_engine)
+        init_details = self._get_schema_equivalence_details(init_engine)
+        init_engine.dispose()
+
+        # Path B: Initialize using upgrade_schema
+        migrate_db_path = temp_db_path.parent / f"{temp_db_path.stem}_migrate{temp_db_path.suffix}"
+        migrate_db_path.touch()
+        migrate_engine = create_engine(f"sqlite:///{migrate_db_path}")
+        upgrade_schema(migrate_engine, migrate_db_path)
+        migrate_details = self._get_schema_equivalence_details(migrate_engine)
+        migrate_engine.dispose()
+
+        # Compare schemas - should be equivalent
+        assert init_details == migrate_details, "Schemas from initialization and migration paths differ"
+
+        # Clean up
+        if init_db_path.exists():
+            init_db_path.unlink()
+        if migrate_db_path.exists():
+            migrate_db_path.unlink()
+
+    def _get_schema_equivalence_details(self, engine):
+        """Get schema details for equivalence comparison (ignoring minor differences)."""
+        inspector = inspect(engine)
+        details = {}
+        for table_name in sorted(inspector.get_table_names()):
+            if table_name == "alembic_version":
+                continue
+            # Get column info without autoincrement flag which may differ
+            columns = []
+            for col in inspector.get_columns(table_name):
+                col_info = {
+                    "name": col["name"],
+                    "type": str(col["type"]),
+                    "nullable": col.get("nullable", True),
+                    "default": col.get("default"),
+                }
+                columns.append(col_info)
+            details[table_name] = {
+                "columns": sorted(columns, key=lambda x: x["name"]),
+                "primary_key": sorted(inspector.get_pk_constraint(table_name).get("constrained_columns", [])),
+                "foreign_keys": sorted(
+                    [
+                        {
+                            "constrained_columns": fk["constrained_columns"],
+                            "referred_table": fk["referred_table"],
+                            "referred_columns": fk["referred_columns"],
+                        }
+                        for fk in inspector.get_foreign_keys(table_name)
+                    ],
+                    key=lambda x: str(x),
+                ),
+                # Unique constraints: compare by column names only, not by name
+                "unique_constraints": sorted(
+                    [
+                        sorted(uc.get("column_names", []))
+                        for uc in inspector.get_unique_constraints(table_name)
+                    ],
+                    key=lambda x: str(x),
+                ),
+                # Indexes: compare by column names only, not by name
+                "indexes": sorted(
+                    [
+                        sorted(idx["column_names"])
+                        for idx in inspector.get_indexes(table_name)
+                    ],
+                    key=lambda x: str(x),
+                ),
+            }
+        return details
+
+    def _get_full_schema_details(self, engine):
+        """Get complete schema details for comparison."""
+        inspector = inspect(engine)
+        details = {}
+        for table_name in sorted(inspector.get_table_names()):
+            if table_name == "alembic_version":
+                continue
+            columns = []
+            for col in inspector.get_columns(table_name):
+                columns.append({
+                    "name": col["name"],
+                    "type": str(col["type"]),
+                    "nullable": col.get("nullable", True),
+                    "default": col.get("default"),
+                    "autoincrement": col.get("autoincrement", False),
+                })
+            details[table_name] = {
+                "columns": columns,
+                "primary_key": sorted(inspector.get_pk_constraint(table_name).get("constrained_columns", [])),
+                "foreign_keys": sorted(
+                    [
+                        {
+                            "constrained_columns": fk["constrained_columns"],
+                            "referred_table": fk["referred_table"],
+                            "referred_columns": fk["referred_columns"],
+                        }
+                        for fk in inspector.get_foreign_keys(table_name)
+                    ],
+                    key=lambda x: str(x),
+                ),
+                "unique_constraints": sorted(
+                    [
+                        {
+                            "name": uc.get("name"),
+                            "column_names": sorted(uc.get("column_names", [])),
+                        }
+                        for uc in inspector.get_unique_constraints(table_name)
+                    ],
+                    key=lambda x: str(x),
+                ),
+                "indexes": sorted(
+                    [
+                        {
+                            "name": idx["name"],
+                            "unique": idx["unique"],
+                            "column_names": idx["column_names"],
+                        }
+                        for idx in inspector.get_indexes(table_name)
+                    ],
+                    key=lambda x: str(x),
+                ),
+            }
+        return details
+
+    def test_schema_remains_readable_after_repeated_upgrade(self, temp_db_path):
+        """Test that the database remains readable after repeated upgrades."""
+        # Create an empty database
+        temp_db_path.touch()
+        engine = create_engine(f"sqlite:///{temp_db_path}")
+
+        # Run upgrades multiple times
+        for _ in range(3):
+            upgrade_schema(engine, temp_db_path)
+
+        # Verify we can read from all tables
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        tables.discard("alembic_version")
+
+        # Should have all expected tables
+        assert tables == EXPECTED_TABLES
+
+        # Verify we can query each table
+        with engine.connect() as conn:
+            for table in tables:
+                result = conn.execute(text(f"SELECT * FROM {table} LIMIT 1"))
+                # Should not raise an error
+                _ = result.fetchall()
+
+        engine.dispose()
+
+    def test_both_paths_have_equivalent_constraints_and_indexes(self, temp_db_path):
+        """Test that both initialization and migration paths produce equivalent constraints and indexes."""
+        # Path A: Initialize
+        init_db_path = temp_db_path.parent / f"{temp_db_path.stem}_init2{temp_db_path.suffix}"
+        init_engine = create_engine(f"sqlite:///{init_db_path}")
+        initialize_schema(init_engine)
+        init_constraints = self._get_constraints_and_indexes(init_engine)
+        init_engine.dispose()
+
+        # Path B: Migrate
+        migrate_db_path = temp_db_path.parent / f"{temp_db_path.stem}_migrate2{temp_db_path.suffix}"
+        migrate_db_path.touch()
+        migrate_engine = create_engine(f"sqlite:///{migrate_db_path}")
+        upgrade_schema(migrate_engine, migrate_db_path)
+        migrate_constraints = self._get_constraints_and_indexes(migrate_engine)
+        migrate_engine.dispose()
+
+        # Compare constraints and indexes
+        assert init_constraints == migrate_constraints
+
+        # Clean up
+        if init_db_path.exists():
+            init_db_path.unlink()
+        if migrate_db_path.exists():
+            migrate_db_path.unlink()
+
+    def _get_constraints_and_indexes(self, engine):
+        """Get constraints and indexes for comparison (ignoring names)."""
+        inspector = inspect(engine)
+        details = {}
+        for table_name in sorted(inspector.get_table_names()):
+            if table_name == "alembic_version":
+                continue
+            details[table_name] = {
+                "foreign_keys": sorted(
+                    [
+                        {
+                            "constrained_columns": fk["constrained_columns"],
+                            "referred_table": fk["referred_table"],
+                            "referred_columns": fk["referred_columns"],
+                        }
+                        for fk in inspector.get_foreign_keys(table_name)
+                    ],
+                    key=lambda x: str(x),
+                ),
+                "unique_constraints": sorted(
+                    [
+                        sorted(uc.get("column_names", []))
+                        for uc in inspector.get_unique_constraints(table_name)
+                    ],
+                    key=lambda x: str(x),
+                ),
+                "indexes": sorted(
+                    [
+                        sorted(idx["column_names"])
+                        for idx in inspector.get_indexes(table_name)
+                    ],
+                    key=lambda x: str(x),
+                ),
+            }
+        return details
