@@ -277,17 +277,28 @@ class TestMapYouTubeError:
         assert "Retry-After" in str(result)
         assert "60" in str(result)
 
-    def test_map_youtube_error_500_temporary_provider_failure(self) -> None:
-        """Test mapping HTTP 500 to TemporaryProviderFailure."""
+    @pytest.mark.parametrize(
+        "status_code,reason",
+        [
+            (500, "Internal Server Error"),
+            (502, "Bad Gateway"),
+            (503, "Service Unavailable"),
+            (504, "Gateway Timeout"),
+            (505, "HTTP Version Not Supported"),
+            (511, "Network Authentication Required"),
+        ],
+    )
+    def test_map_youtube_error_5xx_temporary_provider_failure(self, status_code: int, reason: str) -> None:
+        """Test mapping HTTP 5xx status codes to TemporaryProviderFailure."""
         from playlist_bridge.providers.youtube import map_youtube_error
         from googleapiclient.errors import HttpError
 
         class MockHttpResponse:
             def __init__(self):
-                self.status = 500
-                self.reason = "Internal Server Error"
+                self.status = status_code
+                self.reason = reason
 
-        error = HttpError(MockHttpResponse(), b"Server error")
+        error = HttpError(MockHttpResponse(), f"{reason} error".encode())
         operation = "fetch_playlist_metadata"
 
         result = map_youtube_error(error, operation)
@@ -295,6 +306,7 @@ class TestMapYouTubeError:
         assert isinstance(result, TemporaryProviderFailure)
         assert result.service == "youtube"
         assert result.operation == operation
+        assert str(status_code) in str(result)
 
     def test_map_youtube_error_unknown_status_invalid_response(self) -> None:
         """Test mapping an unknown HTTP status to InvalidProviderResponse."""
