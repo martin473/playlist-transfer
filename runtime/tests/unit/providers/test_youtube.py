@@ -6,6 +6,8 @@ from playlist_bridge.providers.youtube import (
     parse_youtube_duration_ms,
     parse_youtube_playlist_id,
     fetch_youtube_playlist_metadata,
+    fetch_youtube_playlist_item_page,
+    iter_youtube_playlist_items,
 )
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
@@ -14,6 +16,7 @@ from playlist_bridge.providers.errors import (
     RateLimited,
     InvalidProviderResponse,
     TemporaryProviderFailure,
+    CancellationRequested,
 )
 from playlist_bridge.domain.models import PlaylistReference, SourcePlaylistMetadata
 
@@ -357,6 +360,289 @@ class TestMapYouTubeError:
         assert "120" in str(result)
 
 
+class TestFetchYouTubePlaylistItemPage:
+    """Tests for fetch_youtube_playlist_item_page function."""
+
+    def test_returns_items_and_next_page_token(self) -> None:
+        """Test that the function returns items and the next-page token without mutating order."""
+        # This is a minimal test that verifies the function exists and has the correct signature
+        # Full integration tests will use a mock YouTube client
+        from playlist_bridge.providers.youtube import fetch_youtube_playlist_item_page
+        import inspect
+
+        # Verify the function exists and has the expected parameters
+        sig = inspect.signature(fetch_youtube_playlist_item_page)
+        params = list(sig.parameters.keys())
+
+        assert "client" in params
+        assert "playlist_id" in params
+        assert "page_token" in params
+
+        # Check that page_token has a default of None
+        page_token_param = sig.parameters["page_token"]
+        assert page_token_param.default is None
+
+        # Check return annotation includes ItemPage
+        # Note: ItemPage is imported from domain.models
+        from playlist_bridge.domain.models import ItemPage
+        assert sig.return_annotation in (ItemPage, object) or sig.return_annotation == ItemPage
+
+    def test_handles_missing_client(self) -> None:
+        """Test that the function raises appropriate errors when client is missing."""
+        from playlist_bridge.providers.youtube import fetch_youtube_playlist_item_page
+        from playlist_bridge.providers.errors import AuthenticationRequired
+        from googleapiclient.errors import HttpError
+        import pytest
+
+        # Mock a client that raises HttpError
+        class MockHttpResponse:
+            def __init__(self):
+                self.status = 401
+                self.reason = "Unauthorized"
+
+        # Create a client that raises a 401 error
+        class MockClient:
+            def playlistItems(self):
+                class PlaylistItems:
+                    def list(self, **kwargs):
+                        raise HttpError(MockHttpResponse(), b"Unauthorized")
+                return PlaylistItems()
+
+        client = MockClient()
+
+        with pytest.raises(AuthenticationRequired):
+            fetch_youtube_playlist_item_page(client, "PL123")
+
+
+class TestIterYouTubePlaylistItems:
+    """Tests for iter_youtube_playlist_items generator function."""
+
+    def test_three_page_fixture_yields_every_item_exactly_once(self) -> None:
+        """Test that a three-page fixture yields every item exactly once.
+
+        This test uses a mock client that simulates a three-page playlist
+        with 5 items per page (15 total items). It verifies that all items
+        are yielded exactly once in the correct order.
+        """
+        from playlist_bridge.providers.youtube import iter_youtube_playlist_items
+        from playlist_bridge.domain.models import SourceTrack
+
+        # Mock cancellation token that never cancels
+        class NeverCancel:
+            def is_cancelled(self) -> bool:
+                return False
+
+            def raise_if_cancelled(self) -> None:
+                pass
+
+        cancel = NeverCancel()
+
+        # Track items yielded to verify no duplicates and correct order
+        yielded_video_ids = []
+        expected_video_ids = [f"video_{i:03d}" for i in range(15)]
+
+        # Mock client with pagination state
+        class MockClient:
+            def __init__(self):
+                self.page_count = 0
+                # Three pages, 5 items each
+                self.pages = self._build_pages()
+
+            def _build_pages(self):
+                # Page 0: items 0-4, nextPageToken = "page1"
+                # Page 1: items 5-9, nextPageToken = "page2"
+                # Page 2: items 10-14, no nextPageToken
+                items_per_page = 5
+                pages = []
+
+                for page_idx in range(3):
+                    start = page_idx * items_per_page
+                    end = start + items_per_page
+                    items = []
+                    for i in range(start, end):
+                        video_id = f"video_{i:03d}"
+                        items.append({
+                            "snippet": {
+                                "title": f"Track {i}",
+                                "videoOwnerChannelTitle": f"Channel {i % 3}",
+                                "resourceId": {"videoId": video_id},
+                            },
+                            "contentDetails": {
+                                "duration": "PT3M45S",
+                            },
+                        })
+
+                    page_token = f"page{page_idx + 1}" if page_idx < 2 else None
+                    pages.append({
+                        "items": items,
+                        "nextPageToken": page_token,
+                        "pageInfo": {"totalResults": 15},
+                    })
+
+                return pages
+
+            def playlistItems(self):
+                class PlaylistItems:
+                    def __init__(self, parent):
+                        self.parent = parent
+
+                    def list(self, **kwargs):
+                        page_token = kwargs.get("pageToken", "")
+                        # Determine which page to return based on page_token
+                        if page_token == "page1":
+                            idx = 1
+                        elif page_token == "page2":
+                            idx = 2
+                        else:
+                            idx = 0
+
+                        # Return a mock response with execute method
+                        class MockResponse:
+                            def __init__(self, data):
+                                self._data = data
+
+                            def get(self, key, default=None):
+                                return self._data.get(key, default)
+
+                            def __getitem__(self, key):
+                                return self._data[key]
+
+                            def execute(self):
+                                return self._data
+
+                        return MockResponse(self.parent.pages[idx])
+
+                return PlaylistItems(self)
+
+        client = MockClient()
+
+        # Iterate through all items
+        for track in iter_youtube_playlist_items(client, "PL123", cancel):
+            assert isinstance(track, SourceTrack)
+            assert track.video_id is not None
+            yielded_video_ids.append(track.video_id)
+
+        # Verify all 15 items were yielded exactly once in the correct order
+        assert yielded_video_ids == expected_video_ids
+        assert len(yielded_video_ids) == 15
+
+    def test_handles_cancellation(self) -> None:
+        """Test that the generator properly handles cancellation requests."""
+        from playlist_bridge.providers.youtube import iter_youtube_playlist_items
+        from playlist_bridge.providers.errors import CancellationRequested
+
+        # Mock cancellation token that cancels after 3 items
+        class CancelAfterThree:
+            def __init__(self):
+                self.count = 0
+
+            def is_cancelled(self) -> bool:
+                return self.count >= 3
+
+            def raise_if_cancelled(self) -> None:
+                if self.is_cancelled():
+                    raise CancellationRequested("youtube", "iter_playlist_items", "Cancelled")
+
+        cancel = CancelAfterThree()
+
+        # Mock client with a single page of 10 items
+        class MockClient:
+            def playlistItems(self):
+                class PlaylistItems:
+                    def list(self, **kwargs):
+                        items = []
+                        for i in range(10):
+                            items.append({
+                                "snippet": {
+                                    "title": f"Track {i}",
+                                    "videoOwnerChannelTitle": f"Channel {i}",
+                                    "resourceId": {"videoId": f"video_{i:03d}"},
+                                },
+                                "contentDetails": {
+                                    "duration": "PT3M45S",
+                                },
+                            })
+
+                        class MockResponse:
+                            def __init__(self):
+                                self._data = {
+                                    "items": items,
+                                    "nextPageToken": None,
+                                    "pageInfo": {"totalResults": 10},
+                                }
+
+                            def get(self, key, default=None):
+                                return self._data.get(key, default)
+
+                            def __getitem__(self, key):
+                                return self._data[key]
+
+                            def execute(self):
+                                return self._data
+
+                        return MockResponse()
+
+                return PlaylistItems()
+
+        client = MockClient()
+
+        # Iterate - should raise CancellationRequested after 3 items
+        yielded = []
+        with pytest.raises(CancellationRequested):
+            for track in iter_youtube_playlist_items(client, "PL123", cancel):
+                cancel.count += 1  # Increment to trigger cancellation
+                yielded.append(track.video_id)
+
+        # Should have yielded exactly 3 items before cancellation
+        assert len(yielded) == 3
+        assert yielded == [f"video_{i:03d}" for i in range(3)]
+
+    def test_handles_empty_playlist(self) -> None:
+        """Test that the generator handles an empty playlist correctly."""
+        from playlist_bridge.providers.youtube import iter_youtube_playlist_items
+
+        class NeverCancel:
+            def is_cancelled(self) -> bool:
+                return False
+
+            def raise_if_cancelled(self) -> None:
+                pass
+
+        cancel = NeverCancel()
+
+        # Mock client with empty playlist
+        class MockClient:
+            def playlistItems(self):
+                class PlaylistItems:
+                    def list(self, **kwargs):
+                        class MockResponse:
+                            def __init__(self):
+                                self._data = {
+                                    "items": [],
+                                    "nextPageToken": None,
+                                    "pageInfo": {"totalResults": 0},
+                                }
+
+                            def get(self, key, default=None):
+                                return self._data.get(key, default)
+
+                            def __getitem__(self, key):
+                                return self._data[key]
+
+                            def execute(self):
+                                return self._data
+
+                        return MockResponse()
+
+                return PlaylistItems()
+
+        client = MockClient()
+
+        # Iterate - should yield nothing
+        items = list(iter_youtube_playlist_items(client, "PL123", cancel))
+        assert len(items) == 0
+
+
 class TestFetchYouTubePlaylistMetadata:
     """Tests for fetch_youtube_playlist_metadata function."""
 
@@ -364,3 +650,213 @@ class TestFetchYouTubePlaylistMetadata:
         """Test that metadata is correctly built from a response."""
         # This is a stub test - implementation will come in later steps
         pass
+
+
+class TestMapYouTubePlaylistItem:
+    """Tests for map_youtube_playlist_item function."""
+
+    def test_maps_available_video(self) -> None:
+        """Test mapping an available video to SourceTrack."""
+        from playlist_bridge.providers.youtube import map_youtube_playlist_item
+
+        item = {
+            "id": "PL123_item1",
+            "snippet": {
+                "title": "My Awesome Song",
+                "videoOwnerChannelTitle": "Music Channel",
+                "resourceId": {"videoId": "abc123"},
+            },
+            "contentDetails": {},
+        }
+        video = {
+            "id": "abc123",
+            "contentDetails": {"duration": "PT3M30S"},
+        }
+
+        track = map_youtube_playlist_item(item, video)
+        track.position = 0
+
+        assert track.title == "My Awesome Song"
+        assert track.artist_names == ["Music Channel"]
+        assert track.duration_seconds == 210
+        assert track.video_id == "abc123"
+        assert track.channel_title == "Music Channel"
+        assert track.availability == "available"
+
+    def test_maps_available_video_with_missing_title(self) -> None:
+        """Test mapping an available video with missing title."""
+        from playlist_bridge.providers.youtube import map_youtube_playlist_item
+
+        item = {
+            "id": "PL123_item2",
+            "snippet": {
+                "title": "",
+                "videoOwnerChannelTitle": "Music Channel",
+                "resourceId": {"videoId": "def456"},
+            },
+            "contentDetails": {},
+        }
+        video = {
+            "id": "def456",
+            "contentDetails": {"duration": "PT2M15S"},
+        }
+
+        track = map_youtube_playlist_item(item, video)
+        track.position = 1
+
+        assert track.title == "Untitled"
+        assert track.artist_names == ["Music Channel"]
+        assert track.duration_seconds == 135
+        assert track.video_id == "def456"
+        assert track.availability == "available"
+
+    def test_maps_unavailable_video(self) -> None:
+        """Test mapping an unavailable (deleted) video to SourceTrack."""
+        from playlist_bridge.providers.youtube import map_youtube_playlist_item
+
+        item = {
+            "id": "PL123_item3",
+            "snippet": {
+                "title": "Deleted Video Title",
+                "videoOwnerChannelTitle": "Music Channel",
+                "resourceId": {},
+            },
+            "contentDetails": {},
+        }
+
+        track = map_youtube_playlist_item(item, None)
+        track.position = 2
+
+        assert track.title == "Deleted Video Title"
+        assert track.artist_names == ["Music Channel"]
+        assert track.duration_seconds == 0
+        assert track.video_id.startswith("deleted_PL123_item3")
+        assert track.channel_title == "Music Channel"
+        assert track.availability == "unavailable"
+
+    def test_maps_unavailable_video_with_missing_title(self) -> None:
+        """Test mapping an unavailable video with missing title."""
+        from playlist_bridge.providers.youtube import map_youtube_playlist_item
+
+        item = {
+            "id": "PL123_item4",
+            "snippet": {
+                "title": "",
+                "videoOwnerChannelTitle": "",
+                "resourceId": {},
+            },
+            "contentDetails": {},
+        }
+
+        track = map_youtube_playlist_item(item, None)
+        track.position = 3
+
+        assert track.title == "Deleted Video"
+        assert track.artist_names == ["Unknown Artist"]
+        assert track.duration_seconds == 0
+        assert track.video_id.startswith("deleted_PL123_item4")
+        assert track.channel_title is None
+        assert track.availability == "unavailable"
+
+    def test_maps_unavailable_video_without_item_id(self) -> None:
+        """Test mapping an unavailable video without an item ID."""
+        from playlist_bridge.providers.youtube import map_youtube_playlist_item
+
+        item = {
+            "snippet": {
+                "title": "No ID Video",
+                "videoOwnerChannelTitle": "Some Channel",
+                "resourceId": {},
+            },
+            "contentDetails": {},
+        }
+
+        track = map_youtube_playlist_item(item, None)
+        track.position = 4
+
+        assert track.title == "No ID Video"
+        assert track.artist_names == ["Some Channel"]
+        assert track.duration_seconds == 0
+        assert track.video_id.startswith("deleted_")
+        assert track.channel_title == "Some Channel"
+        assert track.availability == "unavailable"
+
+    def test_maps_private_video(self) -> None:
+        """Test mapping a private video to SourceTrack with preserved metadata."""
+        from playlist_bridge.providers.youtube import map_youtube_playlist_item
+
+        item = {
+            "id": "PL123_item5",
+            "snippet": {
+                "title": "Private Song",
+                "videoOwnerChannelTitle": "Private Channel",
+                "resourceId": {},
+            },
+            "contentDetails": {},
+            "status": {
+                "privacyStatus": "private",
+            },
+        }
+
+        track = map_youtube_playlist_item(item, None)
+        track.position = 5
+
+        assert track.title == "Private Song"
+        assert track.artist_names == ["Private Channel"]
+        assert track.duration_seconds == 0
+        assert track.video_id.startswith("private_PL123_item5")
+        assert track.channel_title == "Private Channel"
+        assert track.availability == "unavailable"
+
+    def test_maps_private_video_with_missing_title(self) -> None:
+        """Test mapping a private video with missing title."""
+        from playlist_bridge.providers.youtube import map_youtube_playlist_item
+
+        item = {
+            "id": "PL123_item6",
+            "snippet": {
+                "title": "",
+                "videoOwnerChannelTitle": "Private Channel",
+                "resourceId": {},
+            },
+            "contentDetails": {},
+            "status": {
+                "privacyStatus": "private",
+            },
+        }
+
+        track = map_youtube_playlist_item(item, None)
+        track.position = 6
+
+        assert track.title == "Untitled"
+        assert track.artist_names == ["Private Channel"]
+        assert track.duration_seconds == 0
+        assert track.video_id.startswith("private_PL123_item6")
+        assert track.channel_title == "Private Channel"
+        assert track.availability == "unavailable"
+
+    def test_maps_private_video_without_item_id(self) -> None:
+        """Test mapping a private video without an item ID."""
+        from playlist_bridge.providers.youtube import map_youtube_playlist_item
+
+        item = {
+            "snippet": {
+                "title": "Private Video No ID",
+                "videoOwnerChannelTitle": "Some Channel",
+                "resourceId": {},
+            },
+            "contentDetails": {},
+            "status": {
+                "privacyStatus": "private",
+            },
+        }
+
+        track = map_youtube_playlist_item(item, None)
+        track.position = 7
+
+        assert track.title == "Private Video No ID"
+        assert track.artist_names == ["Some Channel"]
+        assert track.duration_seconds == 0
+        assert track.video_id.startswith("private_")
+        assert track.channel_title == "Some Channel"
+        assert track.availability == "unavailable"

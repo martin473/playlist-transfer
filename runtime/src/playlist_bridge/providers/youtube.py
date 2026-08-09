@@ -1,6 +1,6 @@
 """YouTube provider utilities for parsing and handling YouTube data."""
 
-from typing import Optional, Protocol
+from typing import Iterator, Optional, Protocol
 from urllib.parse import parse_qs, urlparse
 
 import isodate
@@ -11,7 +11,9 @@ from playlist_bridge.domain.models import (
     LoadedSourcePlaylist,
     ItemPage,
     SourcePlaylistMetadata,
+    SourceTrack,
 )
+from playlist_bridge.domain.enums import TrackStatus
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
     PermissionDenied,
@@ -367,6 +369,191 @@ def fetch_youtube_playlist_metadata(client: object, playlist_id: str) -> SourceP
         raise InvalidProviderResponse("youtube", "fetch_playlist_metadata", str(e))
 
 
+def fetch_youtube_playlist_item_page(
+    client: object,
+    playlist_id: str,
+    page_token: str | None = None,
+) -> ItemPage:
+    """Fetch one page of items from a YouTube playlist.
+
+    This function calls the YouTube Data API playlistItems-list endpoint for a single
+    playlist ID and maps the response to an ItemPage containing SourceTrack objects.
+
+    Args:
+        client: YouTube Data API client (googleapiclient discovery resource).
+        playlist_id: YouTube playlist ID to fetch.
+        page_token: Optional token for pagination. If None, fetches the first page.
+
+    Returns:
+        ItemPage containing SourceTrack objects for items in this page,
+        with next_page_token for pagination and total_count if available.
+
+    Raises:
+        AuthenticationRequired: If credentials are invalid or expired.
+        PermissionDenied: If the user lacks permission to access the playlist.
+        ProviderNotFound: If the playlist does not exist.
+        RateLimited: If the YouTube API rate limit is exceeded.
+        InvalidProviderResponse: If the response is malformed or missing fields.
+        TemporaryProviderFailure: If the API is temporarily unavailable.
+    """
+    import json
+    from googleapiclient.errors import HttpError
+
+    # YouTube API max results per page (max 50 per API docs)
+    MAX_RESULTS = 50
+
+    try:
+        # Call the YouTube API playlistItems-list endpoint
+        request = client.playlistItems().list(  # type: ignore[attr-defined]
+            part="snippet,contentDetails,status",
+            playlistId=playlist_id,
+            maxResults=MAX_RESULTS,
+            pageToken=page_token if page_token else "",
+        )
+        response = request.execute()
+    except HttpError as e:
+        # Map HTTP errors to our provider errors
+        status_code = e.resp.status
+
+        if status_code == 401 or status_code == 403:
+            if "quota" in str(e).lower():
+                raise RateLimited("youtube", "fetch_playlist_item_page", str(e))
+            if "permission" in str(e).lower():
+                raise PermissionDenied("youtube", "fetch_playlist_item_page", str(e))
+            raise AuthenticationRequired("youtube", "fetch_playlist_item_page", str(e))
+        elif status_code == 404:
+            raise ProviderNotFound("youtube", "fetch_playlist_item_page", f"Playlist {playlist_id} not found")
+        elif status_code == 429:
+            raise RateLimited("youtube", "fetch_playlist_item_page", str(e))
+        elif status_code >= 500:
+            raise TemporaryProviderFailure("youtube", "fetch_playlist_item_page", str(e))
+        else:
+            raise InvalidProviderResponse("youtube", "fetch_playlist_item_page", str(e))
+
+    # Extract items from response
+    items_data = response.get("items", [])
+
+    # Build SourceTrack objects
+    source_tracks: list[SourceTrack] = []
+
+    for idx, item in enumerate(items_data):
+        try:
+            snippet = item.get("snippet", {})
+            content_details = item.get("contentDetails", {})
+
+            # Extract video ID from the resourceId
+            resource_id = snippet.get("resourceId", {})
+            video_id = resource_id.get("videoId", "")
+
+            if not video_id:
+                # Skip items without a video ID (e.g., deleted videos)
+                continue
+
+            title = snippet.get("title", "")
+            if not title:
+                title = "Untitled"
+
+            channel_title = snippet.get("videoOwnerChannelTitle", "")
+            if not channel_title:
+                channel_title = snippet.get("channelTitle", "")
+
+            # Artist names: use channel title as the main artist
+            artist_names = [channel_title] if channel_title else ["Unknown Artist"]
+
+            # Parse duration from contentDetails
+            duration_iso = content_details.get("duration", "")
+            duration_ms = parse_youtube_duration_ms(duration_iso) if duration_iso else None
+
+            # Convert milliseconds to seconds
+            duration_seconds = (duration_ms // 1000) if duration_ms is not None else 0
+
+            # The position in the playlist is the index in the response
+            # but the item itself may not have a position field. Use the index.
+            position = idx
+
+            source_track = SourceTrack(
+                position=position,
+                title=title,
+                artist_names=artist_names,
+                duration_seconds=duration_seconds,
+                video_id=video_id,
+                channel_title=channel_title if channel_title else None,
+            )
+            source_tracks.append(source_track)
+        except (KeyError, ValueError, TypeError) as e:
+            # Log error but continue processing other items
+            # Raise InvalidProviderResponse for malformed data
+            raise InvalidProviderResponse(
+                "youtube",
+                "fetch_playlist_item_page",
+                f"Failed to parse item at index {idx}: {e}",
+            )
+
+    # Extract pagination info
+    next_page_token = response.get("nextPageToken")
+    total_count = response.get("pageInfo", {}).get("totalResults")
+
+    # Determine if there are more pages
+    has_more = next_page_token is not None and bool(next_page_token)
+
+    # Return ItemPage (alias for YouTubePlaylistItemPage)
+    return ItemPage(
+        items=source_tracks,
+        next_page_token=next_page_token,
+        total_count=total_count,
+        has_more=has_more,
+    )
+
+
+def iter_youtube_playlist_items(
+    client: object,
+    playlist_id: str,
+    cancel: CancellationToken,
+) -> Iterator[SourceTrack]:
+    """Iterate over all items in a YouTube playlist, handling pagination.
+
+    This generator repeatedly calls fetch_youtube_playlist_item_page until
+    no next-page token remains, yielding each SourceTrack as it becomes available.
+
+    Args:
+        client: YouTube Data API client (googleapiclient discovery resource).
+        playlist_id: YouTube playlist ID to fetch.
+        cancel: CancellationToken to check for cancellation requests.
+
+    Yields:
+        SourceTrack objects for each item in the playlist, in order.
+
+    Raises:
+        AuthenticationRequired: If credentials are invalid or expired.
+        PermissionDenied: If the user lacks permission to access the playlist.
+        ProviderNotFound: If the playlist does not exist.
+        RateLimited: If the YouTube API rate limit is exceeded.
+        InvalidProviderResponse: If the response is malformed or missing fields.
+        TemporaryProviderFailure: If the API is temporarily unavailable.
+        CancellationRequested: If the operation is cancelled via the token.
+    """
+    page_token: str | None = None
+
+    while True:
+        # Check for cancellation before each page request
+        cancel.raise_if_cancelled()
+
+        # Fetch the next page
+        page = fetch_youtube_playlist_item_page(client, playlist_id, page_token)
+
+        # Yield each item from the page
+        for item in page.items:
+            cancel.raise_if_cancelled()
+            yield item
+
+        # Check if there are more pages
+        if not page.has_more or page.next_page_token is None:
+            break
+
+        # Update page token for the next iteration
+        page_token = page.next_page_token
+
+
 def map_youtube_error(error: Exception, operation: str) -> ProviderError:
     """Map a YouTube API HttpError to a ProviderError type.
 
@@ -419,3 +606,132 @@ def map_youtube_error(error: Exception, operation: str) -> ProviderError:
             operation,
             f"Unexpected YouTube API error: status={status_code} detail={str(error)}",
         )
+
+
+def map_youtube_playlist_item(
+    item: dict,
+    video: dict | None,
+) -> SourceTrack:
+    """Map a YouTube playlist item to a SourceTrack.
+
+    This function handles both available and unavailable (deleted, private, or missing)
+    videos. For available videos, it uses the video metadata to populate the track
+    details. For unavailable videos, it creates a placeholder track with the
+    UNAVAILABLE status.
+
+    Args:
+        item: The YouTube playlist item dict from the API.
+        video: Optional video metadata dict. If None, the video is considered
+            unavailable (deleted, private, or missing).
+
+    Returns:
+        SourceTrack with the item's position and metadata, and availability state.
+
+    Examples:
+        >>> item = {"snippet": {"title": "My Song", "videoOwnerChannelTitle": "Channel"}}
+        >>> video = {"contentDetails": {"duration": "PT3M30S"}}
+        >>> track = map_youtube_playlist_item(item, video)
+        >>> track.availability == TrackStatus.AVAILABLE
+        True
+    """
+    from playlist_bridge.domain.enums import TrackStatus
+
+    # Extract basic data from the playlist item
+    snippet = item.get("snippet", {})
+    content_details = item.get("contentDetails", {})
+    resource_id = snippet.get("resourceId", {})
+
+    # Get video ID from the resourceId
+    video_id = resource_id.get("videoId", "")
+
+    # Determine if the video is available
+    is_available = video is not None
+
+    if is_available:
+        # Available video - use video metadata
+        title = snippet.get("title", "")
+        if not title:
+            title = "Untitled"
+
+        channel_title = snippet.get("videoOwnerChannelTitle", "")
+        if not channel_title:
+            channel_title = snippet.get("channelTitle", "")
+
+        artist_names = [channel_title] if channel_title else ["Unknown Artist"]
+
+        # Parse duration from video metadata if available
+        duration_iso = video.get("contentDetails", {}).get("duration", "")
+        duration_ms = parse_youtube_duration_ms(duration_iso) if duration_iso else None
+        duration_seconds = (duration_ms // 1000) if duration_ms is not None else 0
+
+        # Use video ID from the resource, or fallback to the video parameter's ID
+        final_video_id = video_id or video.get("id", "")
+
+        availability = TrackStatus.AVAILABLE
+    else:
+        # Check if the video is private (status.privacyStatus == "private")
+        status = item.get("status", {})
+        privacy_status = status.get("privacyStatus", "")
+        is_private = privacy_status == "private"
+
+        if is_private:
+            # Private video - preserve available metadata from the playlist item
+            title = snippet.get("title", "")
+            if not title:
+                title = "Untitled"
+
+            channel_title = snippet.get("videoOwnerChannelTitle", "")
+            if not channel_title:
+                channel_title = snippet.get("channelTitle", "")
+
+            artist_names = [channel_title] if channel_title else ["Unknown Artist"]
+            duration_seconds = 0
+
+            # Use a placeholder for video_id with "private_" prefix
+            item_id = item.get("id", "")
+            if item_id:
+                final_video_id = f"private_{item_id}"
+            else:
+                # Fallback: use a timestamp-based placeholder
+                import time
+                final_video_id = f"private_{int(time.time())}"
+
+            availability = TrackStatus.UNAVAILABLE
+        else:
+            # Deleted/missing video - create a placeholder track
+            title = snippet.get("title", "Deleted Video")
+            if not title or title == "":
+                title = "Deleted Video"
+
+            channel_title = snippet.get("videoOwnerChannelTitle", "")
+            if not channel_title:
+                channel_title = snippet.get("channelTitle", "")
+
+            artist_names = [channel_title] if channel_title else ["Unknown Artist"]
+            duration_seconds = 0
+
+            # Use a placeholder for video_id since the video is unavailable
+            # Prefer using the playlist item ID if available, otherwise use a generated ID
+            item_id = item.get("id", "")
+            if item_id:
+                final_video_id = f"deleted_{item_id}"
+            else:
+                # Fallback: use a timestamp-based placeholder
+                import time
+                final_video_id = f"deleted_{int(time.time())}"
+
+            availability = TrackStatus.UNAVAILABLE
+
+    # The position should be set by the caller based on the index in the playlist
+    # We default to 0 and let the caller override
+    position = 0
+
+    return SourceTrack(
+        position=position,
+        title=title,
+        artist_names=artist_names,
+        duration_seconds=duration_seconds,
+        video_id=final_video_id,
+        channel_title=channel_title if channel_title else None,
+        availability=availability,
+    )
