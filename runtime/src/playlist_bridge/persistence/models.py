@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import JSON, Integer, String, Text, types, UniqueConstraint, Index
+from sqlalchemy import JSON, Integer, String, Text, types, UniqueConstraint, Index, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from playlist_bridge.persistence.base import Base
@@ -38,6 +38,7 @@ class JobRecord(Base):
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     lease_holder: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     lease_expires_at: Mapped[Optional[datetime]] = mapped_column(types.DateTime(timezone=True), nullable=True)
+    lease_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(types.DateTime(timezone=True), nullable=True)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     def __repr__(self) -> str:
@@ -161,3 +162,45 @@ class ManualCorrection(Base):
             return f"<ManualCorrection fingerprint={self.source_fingerprint} spotify_id={self.spotify_track_id}>"
         else:
             return f"<ManualCorrection fingerprint={self.source_fingerprint} skip={self.skip_reason}>"
+
+
+class SourceTrackRecord(Base):
+    """Source tracks table storing raw source items for a transfer job.
+
+    This model represents a source track from a playlist, keyed by job ID and
+    source item ID. It stores the source position and normalized fields from
+    the domain SourceTrack model.
+
+    A unique constraint prevents duplicate source items within one job.
+    """
+
+    __tablename__ = "source_tracks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
+    source_item_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    artist_names: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    video_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    channel_title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        types.DateTime(timezone=True),
+        nullable=False,
+        default=datetime.now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        types.DateTime(timezone=True),
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "source_item_id", name="uq_source_tracks_job_item"),
+        Index("ix_source_tracks_source_item_id", "source_item_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SourceTrackRecord job_id={self.job_id} source_item_id={self.source_item_id} position={self.position}>"
