@@ -6,8 +6,9 @@ from typing import Sequence
 from sqlalchemy.exc import IntegrityError as SQLAlchemyIntegrityError
 from sqlalchemy.orm import Session
 
-from playlist_bridge.domain.models import AccountProfile, SourceTrack, TransferRequest
-from playlist_bridge.persistence.models import AccountProfileRecord, JobRecord, MatchCacheEntry, SourceTrackRecord
+from playlist_bridge.domain.models import AccountProfile, MatchDecision, SourceTrack, TransferRequest
+from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService
+from playlist_bridge.persistence.models import AccountProfileRecord, JobRecord, ManualCorrection, MatchCacheEntry, MatchDecisionRecord, SourceTrackRecord
 from playlist_bridge.ports import IntegrityError
 
 
@@ -73,6 +74,63 @@ def upsert_match_cache(session: Session, entry: MatchCacheEntry) -> MatchCacheEn
             session.rollback()
             raise IntegrityError(f"Integrity constraint violated: {e}") from e
         return entry
+
+
+def lookup_manual_correction(session: Session, fingerprint: str) -> ManualCorrection | None:
+    """Look up one manual correction by canonical fingerprint.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        fingerprint: Canonical source track fingerprint string.
+
+    Returns:
+        ManualCorrection if found, else None.
+    """
+    return session.query(ManualCorrection).filter_by(source_fingerprint=fingerprint).first()
+
+
+def upsert_manual_correction(session: Session, correction: ManualCorrection) -> ManualCorrection:
+    """Insert or replace one manual correction.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        correction: ManualCorrection instance to insert or update.
+
+    Returns:
+        The persisted ManualCorrection instance (with updated timestamps).
+
+    Raises:
+        IntegrityError: If a database integrity constraint is violated.
+
+    Note:
+        This function uses an upsert pattern: if a record with the same
+        source_fingerprint exists, it updates the existing record; otherwise
+        it inserts a new record. The function commits the transaction.
+    """
+    # Check if a correction with this fingerprint already exists
+    existing = session.query(ManualCorrection).filter_by(
+        source_fingerprint=correction.source_fingerprint
+    ).first()
+
+    if existing:
+        # Update the existing correction with new values
+        existing.spotify_track_id = correction.spotify_track_id
+        existing.skip_reason = correction.skip_reason
+        existing.explanation = correction.explanation
+        existing.origin = correction.origin
+        # updated_at will be updated automatically via onupdate
+        session.commit()
+        # Return the existing record (with updated values and timestamps)
+        return existing
+    else:
+        # Insert new correction
+        try:
+            session.add(correction)
+            session.commit()
+        except SQLAlchemyIntegrityError as e:
+            session.rollback()
+            raise IntegrityError(f"Integrity constraint violated: {e}") from e
+        return correction
 
 
 def create_job(
@@ -146,6 +204,40 @@ def get_job(session: Session, job_id: str) -> JobRecord | None:
         read-only: This function does not modify the database.
     """
     return session.query(JobRecord).filter_by(id=job_id).first()
+
+
+def update_job_state(
+    session: Session,
+    job_id: str,
+    status: JobStatus,
+    updated_at: datetime,
+) -> JobRecord:
+    """Update the state of a job and its updated_at timestamp.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        job_id: Unique identifier for the job.
+        status: New JobStatus to set.
+        updated_at: Updated timestamp (timezone-aware).
+
+    Returns:
+        The updated JobRecord instance.
+
+    Raises:
+        JobNotFoundError: If no job exists with the given job_id.
+
+    Side Effects:
+        sqlite_read, sqlite_write: Updates the job's state and updated_at field.
+    """
+    job = session.query(JobRecord).filter_by(id=job_id).first()
+    if job is None:
+        raise JobNotFoundError(job_id)
+
+    job.state = status.value
+    job.updated_at = updated_at
+    session.commit()
+
+    return job
 
 
 def bulk_insert_source_tracks(
@@ -350,14 +442,15 @@ def get_profile(
 
 def list_profiles(
     session: Session,
-    service: str | None = None,
+    service: SourceService | DestinationService | None = None,
 ) -> list[AccountProfile]:
     """List account profiles, optionally filtered by service.
 
     Args:
         session: SQLAlchemy Session instance.
-        service: If provided, only list profiles for this service.
-                If None, list all profiles across all services.
+        service: If provided, only list profiles for this service (as a
+                SourceService or DestinationService enum). If None, list all
+                profiles across all services.
 
     Returns:
         A list of AccountProfile instances (empty list if none).
@@ -379,3 +472,75 @@ def list_profiles(
         )
         for record in records
     ]
+
+
+def upsert_match_decision(
+    session: Session,
+    job_id: str,
+    decision: MatchDecision,
+) -> MatchDecision:
+    """Insert or replace a match decision for a job and source item.
+
+    This function uses an upsert pattern: if a record with the same job_id
+    and source_item_id exists, it updates the existing record; otherwise
+    it inserts a new record. The transaction is committed automatically.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        job_id: Unique identifier for the job.
+        decision: MatchDecision domain model containing the decision data.
+
+    Returns:
+        The persisted MatchDecision instance.
+
+    Raises:
+        JobNotFoundError: If the job with the given ID does not exist.
+        IntegrityError: If a database integrity constraint is violated.
+    """
+    # Check if the job exists
+    job_exists = session.query(JobRecord).filter_by(id=job_id).first()
+    if job_exists is None:
+        raise JobNotFoundError(job_id)
+
+    # Check if a decision already exists for this job and source item
+    existing = session.query(MatchDecisionRecord).filter_by(
+        job_id=job_id,
+        source_item_id=decision.source_item_id,
+    ).first()
+
+    if existing:
+        # Update the existing record
+        existing.spotify_track_id = decision.destination_track_id
+        existing.score_json = {
+            "score": decision.score,
+            "confidence": decision.confidence,
+            "decision_type": decision.decision_type,
+        }
+        existing.decision_status = decision.decision_type
+        # reviewed field is not in MatchDecision domain model; keep existing value
+        # updated_at will be updated automatically via onupdate
+        session.commit()
+        # Return the updated decision (using the same domain object)
+        return decision
+    else:
+        # Create a new record
+        record = MatchDecisionRecord(
+            job_id=job_id,
+            source_item_id=decision.source_item_id,
+            spotify_track_id=decision.destination_track_id,
+            score_json={
+                "score": decision.score,
+                "confidence": decision.confidence,
+                "decision_type": decision.decision_type,
+            },
+            decision_status=decision.decision_type,
+            reviewed=False,
+        )
+        try:
+            session.add(record)
+            session.commit()
+        except SQLAlchemyIntegrityError as e:
+            session.rollback()
+            raise IntegrityError(f"Integrity constraint violated: {e}") from e
+
+        return decision

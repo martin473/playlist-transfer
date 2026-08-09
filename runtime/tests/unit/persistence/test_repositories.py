@@ -8,10 +8,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from playlist_bridge.domain.enums import TransferMode
-from playlist_bridge.domain.models import SourceTrack, TransferRequest
+from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService, TransferMode
+from playlist_bridge.domain.models import MatchDecision, SourceTrack, TransferRequest
 from playlist_bridge.persistence.base import Base
-from playlist_bridge.persistence.models import JobRecord, MatchCacheEntry
+from playlist_bridge.persistence.models import JobRecord, ManualCorrection, MatchCacheEntry
 from playlist_bridge.persistence.repositories import (
     JobNotFoundError,
     bulk_insert_source_tracks,
@@ -19,7 +19,11 @@ from playlist_bridge.persistence.repositories import (
     get_job,
     get_source_tracks_ordered,
     lookup_match_cache,
+    lookup_manual_correction,
+    update_job_state,
+    upsert_manual_correction,
     upsert_match_cache,
+    upsert_match_decision,
 )
 
 
@@ -817,7 +821,7 @@ class TestSaveProfile:
         # List only spotify profiles
         spotify_profiles = list_profiles(
             session=in_memory_session,
-            service="spotify",
+            service=DestinationService.SPOTIFY,
         )
         assert len(spotify_profiles) == 2
         assert all(p.provider == "spotify" for p in spotify_profiles)
@@ -825,7 +829,7 @@ class TestSaveProfile:
         # List only youtube profiles
         youtube_profiles = list_profiles(
             session=in_memory_session,
-            service="youtube",
+            service=SourceService.YOUTUBE,
         )
         assert len(youtube_profiles) == 1
         assert youtube_profiles[0].provider == "youtube"
@@ -846,6 +850,197 @@ class TestSaveProfile:
 
 
 class TestGetProfile:
+    """Tests for get_profile function."""
+
+    def test_get_profile_returns_profile(self, in_memory_session: Session):
+        """get_profile should return the profile when it exists."""
+        from playlist_bridge.domain.models import AccountProfile
+        from playlist_bridge.persistence.repositories import get_profile, save_profile
+
+        # Save a profile
+        profile = AccountProfile(
+            provider="spotify",
+            account_id="user123",
+            display_name="Test User",
+        )
+        save_profile(session=in_memory_session, profile=profile)
+
+        # Retrieve it
+        retrieved = get_profile(
+            session=in_memory_session,
+            service="spotify",
+            profile_name="user123",
+        )
+
+        assert retrieved is not None
+        assert retrieved.provider == "spotify"
+        assert retrieved.account_id == "user123"
+        assert retrieved.display_name == "Test User"
+
+    def test_get_profile_returns_none_when_missing(self, in_memory_session: Session):
+        """get_profile should return None when the profile doesn't exist."""
+        from playlist_bridge.persistence.repositories import get_profile
+
+        retrieved = get_profile(
+            session=in_memory_session,
+            service="spotify",
+            profile_name="nonexistent",
+        )
+
+        assert retrieved is None
+
+
+class TestUpsertMatchDecision:
+    """Tests for upsert_match_decision function."""
+
+    def test_upsert_match_decision_creates_new(self, in_memory_session: Session):
+        """Upserting a new decision should create a new match decision record."""
+        # Create a job first
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="PL123456789",
+            destination_service="spotify",
+            destination_name="My Playlist",
+            transfer_mode=TransferMode.CREATE,
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        create_job(session=in_memory_session, request=request, job_id=job_id, created_at=created_at)
+
+        # Create a match decision
+        decision = MatchDecision(
+            source_item_id="video_1",
+            destination_uri="spotify:track:abc123",
+            destination_track_id="abc123",
+            destination_title="Test Track",
+            destination_artist_names=["Test Artist"],
+            score=0.95,
+            decision_type="accepted",
+            confidence=0.9,
+        )
+
+        # Upsert the decision
+        result = upsert_match_decision(
+            session=in_memory_session,
+            job_id=job_id,
+            decision=decision,
+        )
+
+        # Verify the result
+        assert result.source_item_id == "video_1"
+        assert result.destination_track_id == "abc123"
+        assert result.score == 0.95
+        assert result.decision_type == "accepted"
+        assert result.confidence == 0.9
+
+        # Verify it was persisted
+        from playlist_bridge.persistence.models import MatchDecisionRecord
+        record = in_memory_session.query(MatchDecisionRecord).filter_by(
+            job_id=job_id,
+            source_item_id="video_1",
+        ).first()
+        assert record is not None
+        assert record.spotify_track_id == "abc123"
+        assert record.decision_status == "accepted"
+        assert record.score_json["score"] == 0.95
+        assert record.score_json["confidence"] == 0.9
+
+    def test_upsert_match_decision_replaces_existing(self, in_memory_session: Session):
+        """A second write replaces the first decision for the same job and source item."""
+        # Create a job first
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="PL123456789",
+            destination_service="spotify",
+            destination_name="My Playlist",
+            transfer_mode=TransferMode.CREATE,
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        create_job(session=in_memory_session, request=request, job_id=job_id, created_at=created_at)
+
+        # Create first decision
+        decision1 = MatchDecision(
+            source_item_id="video_1",
+            destination_uri="spotify:track:first123",
+            destination_track_id="first123",
+            destination_title="First Track",
+            destination_artist_names=["First Artist"],
+            score=0.5,
+            decision_type="review",
+            confidence=0.6,
+        )
+
+        # Upsert first decision
+        upsert_match_decision(
+            session=in_memory_session,
+            job_id=job_id,
+            decision=decision1,
+        )
+
+        # Create second decision (different values, same source_item_id)
+        decision2 = MatchDecision(
+            source_item_id="video_1",
+            destination_uri="spotify:track:second456",
+            destination_track_id="second456",
+            destination_title="Second Track",
+            destination_artist_names=["Second Artist"],
+            score=0.95,
+            decision_type="accepted",
+            confidence=0.9,
+        )
+
+        # Upsert second decision
+        result2 = upsert_match_decision(
+            session=in_memory_session,
+            job_id=job_id,
+            decision=decision2,
+        )
+
+        # Verify the result has the second values
+        assert result2.source_item_id == "video_1"
+        assert result2.destination_track_id == "second456"
+        assert result2.destination_title == "Second Track"
+        assert result2.score == 0.95
+        assert result2.decision_type == "accepted"
+        assert result2.confidence == 0.9
+
+        # Verify the database only has one record (the second one)
+        from playlist_bridge.persistence.models import MatchDecisionRecord
+        records = in_memory_session.query(MatchDecisionRecord).filter_by(
+            job_id=job_id,
+            source_item_id="video_1",
+        ).all()
+        assert len(records) == 1
+        assert records[0].spotify_track_id == "second456"
+        assert records[0].decision_status == "accepted"
+        assert records[0].score_json["score"] == 0.95
+        assert records[0].score_json["confidence"] == 0.9
+
+    def test_upsert_match_decision_job_not_found(self, in_memory_session: Session):
+        """Upserting a decision for a non-existent job should raise JobNotFoundError."""
+        non_existent_job_id = "non-existent-job-id"
+
+        decision = MatchDecision(
+            source_item_id="video_1",
+            destination_uri="spotify:track:abc123",
+            destination_track_id="abc123",
+            destination_title="Test Track",
+            destination_artist_names=["Test Artist"],
+            score=0.95,
+            decision_type="accepted",
+            confidence=0.9,
+        )
+
+        with pytest.raises(JobNotFoundError) as exc_info:
+            upsert_match_decision(
+                session=in_memory_session,
+                job_id=non_existent_job_id,
+                decision=decision,
+            )
+
+        assert exc_info.value.job_id == non_existent_job_id
+        assert str(exc_info.value) == f"Job not found: {non_existent_job_id}"
     """Tests for get_profile function."""
 
     def test_get_profile_returns_existing_profile(self, in_memory_session: Session):
@@ -950,3 +1145,246 @@ class TestGetProfile:
         )
 
         assert result is None
+
+
+class TestLookupManualCorrection:
+    """Tests for lookup_manual_correction function."""
+
+    def test_missing_fingerprint_returns_none(self, in_memory_session: Session):
+        """A missing fingerprint returns no correction."""
+        result = lookup_manual_correction(in_memory_session, "non-existent-fingerprint")
+        assert result is None
+
+    def test_existing_fingerprint_with_spotify_id_returns_correction(self, in_memory_session: Session):
+        """An existing fingerprint with a Spotify ID returns the correction."""
+        # Insert a manual correction
+        correction = ManualCorrection(
+            source_fingerprint="test-fingerprint-123",
+            spotify_track_id="spotify:track:abc123",
+            skip_reason=None,
+            explanation="User selected this track",
+            origin="manual",
+        )
+        in_memory_session.add(correction)
+        in_memory_session.commit()
+
+        # Look it up
+        result = lookup_manual_correction(in_memory_session, "test-fingerprint-123")
+        assert result is not None
+        assert result.source_fingerprint == "test-fingerprint-123"
+        assert result.spotify_track_id == "spotify:track:abc123"
+        assert result.skip_reason is None
+        assert result.explanation == "User selected this track"
+        assert result.origin == "manual"
+
+    def test_existing_fingerprint_with_skip_distinguishable(self, in_memory_session: Session):
+        """A stored skip is distinguishable from no correction."""
+        # Insert a manual correction with a skip reason
+        correction = ManualCorrection(
+            source_fingerprint="skip-fingerprint-456",
+            spotify_track_id=None,
+            skip_reason="user_skipped",
+            explanation="User skipped this track",
+            origin="manual",
+        )
+        in_memory_session.add(correction)
+        in_memory_session.commit()
+
+        # Look it up - should find the skip
+        result = lookup_manual_correction(in_memory_session, "skip-fingerprint-456")
+        assert result is not None
+        assert result.source_fingerprint == "skip-fingerprint-456"
+        assert result.spotify_track_id is None
+        assert result.skip_reason == "user_skipped"
+        assert result.explanation == "User skipped this track"
+
+        # Verify a different fingerprint returns None (distinguishable from no correction)
+        result_none = lookup_manual_correction(in_memory_session, "non-existent-fingerprint")
+        assert result_none is None
+
+        # Also verify that the skip is not confused with a Spotify ID correction
+        # by checking that the skip_reason is set and spotify_track_id is None
+        assert result.spotify_track_id is None
+        assert result.skip_reason is not None
+
+
+class TestUpsertManualCorrection:
+    """Tests for upsert_manual_correction function."""
+
+    def test_upsert_creates_new_correction(self, in_memory_session: Session):
+        """Upserting a new fingerprint creates a new manual correction."""
+        # Create a new correction
+        correction = ManualCorrection(
+            source_fingerprint="new-fingerprint-789",
+            spotify_track_id="spotify:track:new123",
+            skip_reason=None,
+            explanation="User selected this track",
+            origin="manual",
+        )
+
+        # Upsert it
+        result = upsert_manual_correction(in_memory_session, correction)
+
+        # Verify it was inserted
+        assert result.source_fingerprint == "new-fingerprint-789"
+        assert result.spotify_track_id == "spotify:track:new123"
+        assert result.skip_reason is None
+        assert result.explanation == "User selected this track"
+        assert result.origin == "manual"
+
+        # Verify it exists in the database
+        lookup_result = lookup_manual_correction(in_memory_session, "new-fingerprint-789")
+        assert lookup_result is not None
+        assert lookup_result.source_fingerprint == "new-fingerprint-789"
+
+    def test_upsert_replaces_existing_correction(self, in_memory_session: Session):
+        """A newer correction replaces the prior correction."""
+        # Insert initial correction
+        initial_correction = ManualCorrection(
+            source_fingerprint="fingerprint-to-update",
+            spotify_track_id="spotify:track:original",
+            skip_reason=None,
+            explanation="Original selection",
+            origin="manual",
+        )
+        upsert_manual_correction(in_memory_session, initial_correction)
+
+        # Verify initial insertion
+        initial_lookup = lookup_manual_correction(in_memory_session, "fingerprint-to-update")
+        assert initial_lookup is not None
+        assert initial_lookup.spotify_track_id == "spotify:track:original"
+
+        # Create a newer correction with the same fingerprint
+        newer_correction = ManualCorrection(
+            source_fingerprint="fingerprint-to-update",
+            spotify_track_id="spotify:track:newer",
+            skip_reason=None,
+            explanation="Newer selection",
+            origin="manual",
+        )
+
+        # Upsert the newer correction
+        result = upsert_manual_correction(in_memory_session, newer_correction)
+
+        # Verify the newer correction replaced the older one
+        assert result.source_fingerprint == "fingerprint-to-update"
+        assert result.spotify_track_id == "spotify:track:newer"
+        assert result.explanation == "Newer selection"
+
+        # Verify only one record exists (the newer one)
+        lookup_result = lookup_manual_correction(in_memory_session, "fingerprint-to-update")
+        assert lookup_result is not None
+        assert lookup_result.spotify_track_id == "spotify:track:newer"
+        assert lookup_result.explanation == "Newer selection"
+
+        # Count records to ensure no duplicates
+        all_records = in_memory_session.query(ManualCorrection).filter_by(
+            source_fingerprint="fingerprint-to-update"
+        ).all()
+        assert len(all_records) == 1
+
+    def test_upsert_with_skip_replaces_prior_correction(self, in_memory_session: Session):
+        """Upserting a skip replaces a prior Spotify ID correction."""
+        # Insert initial correction with Spotify ID
+        initial_correction = ManualCorrection(
+            source_fingerprint="fingerprint-skip-test",
+            spotify_track_id="spotify:track:initial",
+            skip_reason=None,
+            explanation="Initial selection",
+            origin="manual",
+        )
+        upsert_manual_correction(in_memory_session, initial_correction)
+
+        # Verify initial insertion
+        initial_lookup = lookup_manual_correction(in_memory_session, "fingerprint-skip-test")
+        assert initial_lookup is not None
+        assert initial_lookup.spotify_track_id == "spotify:track:initial"
+        assert initial_lookup.skip_reason is None
+
+        # Upsert a skip correction
+        skip_correction = ManualCorrection(
+            source_fingerprint="fingerprint-skip-test",
+            spotify_track_id=None,
+            skip_reason="user_skipped",
+            explanation="User skipped this track",
+            origin="manual",
+        )
+        result = upsert_manual_correction(in_memory_session, skip_correction)
+
+        # Verify the skip replaced the prior correction
+        assert result.source_fingerprint == "fingerprint-skip-test"
+        assert result.spotify_track_id is None
+        assert result.skip_reason == "user_skipped"
+        assert result.explanation == "User skipped this track"
+
+        # Verify only one record exists
+        lookup_result = lookup_manual_correction(in_memory_session, "fingerprint-skip-test")
+        assert lookup_result is not None
+        assert lookup_result.spotify_track_id is None
+        assert lookup_result.skip_reason == "user_skipped"
+
+        all_records = in_memory_session.query(ManualCorrection).filter_by(
+            source_fingerprint="fingerprint-skip-test"
+        ).all()
+        assert len(all_records) == 1
+
+
+class TestUpdateJobState:
+    """Tests for update_job_state function."""
+
+    def test_update_job_state_success(self, in_memory_session: Session):
+        """update_job_state successfully updates job state and updated_at."""
+        # Create a job first
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        job = create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+        assert job.state == "pending"
+
+        # Update the job state
+        new_status = JobStatus.READING
+        updated_at = datetime.now(timezone.utc)
+        updated_job = update_job_state(
+            session=in_memory_session,
+            job_id=job_id,
+            status=new_status,
+            updated_at=updated_at,
+        )
+
+        # Verify the state was updated
+        assert updated_job.id == job_id
+        assert updated_job.state == "reading"
+        # Compare datetime without timezone info (SQLite may not preserve it)
+        assert updated_job.updated_at.replace(tzinfo=None) == updated_at.replace(tzinfo=None)
+
+        # Reload the job and verify the state persists
+        reloaded_job = get_job(in_memory_session, job_id)
+        assert reloaded_job is not None
+        assert reloaded_job.state == "reading"
+        assert reloaded_job.updated_at.replace(tzinfo=None) == updated_at.replace(tzinfo=None)
+
+    def test_update_job_state_job_not_found(self, in_memory_session: Session):
+        """update_job_state raises JobNotFoundError when job doesn't exist."""
+        non_existent_job_id = "non-existent-job-id"
+        updated_at = datetime.now(timezone.utc)
+
+        with pytest.raises(JobNotFoundError) as exc_info:
+            update_job_state(
+                session=in_memory_session,
+                job_id=non_existent_job_id,
+                status=JobStatus.READING,
+                updated_at=updated_at,
+            )
+
+        assert exc_info.value.job_id == non_existent_job_id
