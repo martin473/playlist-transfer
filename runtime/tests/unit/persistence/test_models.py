@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from playlist_bridge.persistence.base import Base
-from playlist_bridge.persistence.models import JobRecord, AccountProfileRecord, MatchCacheEntry, ManualCorrection, SourceTrackRecord
+from playlist_bridge.persistence.models import JobRecord, AccountProfileRecord, MatchCacheEntry, ManualCorrection, SourceTrackRecord, MatchDecisionRecord
 
 
 @pytest.fixture
@@ -902,3 +902,277 @@ def test_source_track_record_same_job_different_item_allowed(session):
     assert len(tracks) == 2
     source_item_ids = {t.source_item_id for t in tracks}
     assert source_item_ids == {"video-111", "video-222"}
+
+
+def test_match_decision_record_imports():
+    """Test that MatchDecisionRecord imports and can be instantiated."""
+    now = datetime.now(timezone.utc)
+    decision = MatchDecisionRecord(
+        job_id="job-test-001",
+        source_item_id="video-123",
+        spotify_track_id=None,
+        score_json={"duration": 95, "title": 80},
+        decision_status="pending",
+        reviewed=False,
+        created_at=now,
+        updated_at=now,
+    )
+    assert decision.job_id == "job-test-001"
+    assert decision.source_item_id == "video-123"
+    assert decision.spotify_track_id is None
+    assert decision.score_json == {"duration": 95, "title": 80}
+    assert decision.decision_status == "pending"
+    assert decision.reviewed is False
+
+
+def test_match_decision_record_round_trip(session):
+    """Test that a match decision record can be created, saved, and reloaded."""
+    # Create a job first (required for foreign key)
+    now = datetime.now(timezone.utc)
+    job = JobRecord(
+        id="job-match-001",
+        request_json={"source": "spotify:playlist:test"},
+        state="pending",
+        created_at=now,
+    )
+    session.add(job)
+    session.commit()
+
+    # Create a match decision
+    original = MatchDecisionRecord(
+        job_id="job-match-001",
+        source_item_id="video-abc",
+        spotify_track_id="spotify:track:xyz789",
+        score_json={
+            "duration_similarity": 0.85,
+            "title_similarity": 0.92,
+            "artist_match": True,
+            "overall_score": 0.88,
+        },
+        decision_status="matched",
+        reviewed=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+    # Save to database
+    session.add(original)
+    session.commit()
+
+    # Reload from database
+    reloaded = session.query(MatchDecisionRecord).filter_by(
+        job_id="job-match-001",
+        source_item_id="video-abc"
+    ).first()
+    assert reloaded is not None
+
+    # Verify all fields round-trip unchanged
+    assert reloaded.job_id == original.job_id
+    assert reloaded.source_item_id == original.source_item_id
+    assert reloaded.spotify_track_id == original.spotify_track_id
+    assert reloaded.score_json == original.score_json
+    assert reloaded.decision_status == original.decision_status
+    assert reloaded.reviewed == original.reviewed
+    assert reloaded.created_at == original.created_at
+    assert reloaded.updated_at == original.updated_at
+
+
+def test_match_decision_record_default_values(session):
+    """Test default values for match decision fields."""
+    now = datetime.now(timezone.utc)
+    job = JobRecord(
+        id="job-match-002",
+        request_json={"source": "spotify:playlist:test2"},
+        state="pending",
+        created_at=now,
+    )
+    session.add(job)
+    session.commit()
+
+    # Create with minimal fields
+    decision = MatchDecisionRecord(
+        job_id="job-match-002",
+        source_item_id="video-def",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(decision)
+    session.commit()
+
+    reloaded = session.query(MatchDecisionRecord).filter_by(
+        job_id="job-match-002",
+        source_item_id="video-def"
+    ).first()
+    assert reloaded is not None
+    assert reloaded.spotify_track_id is None
+    assert reloaded.score_json == {}
+    assert reloaded.decision_status == "pending"
+    assert reloaded.reviewed is False
+
+
+def test_match_decision_record_unique_constraint(session):
+    """Test that duplicate (job_id, source_item_id) pairs are prevented."""
+    now = datetime.now(timezone.utc)
+    job = JobRecord(
+        id="job-match-003",
+        request_json={"source": "spotify:playlist:test3"},
+        state="pending",
+        created_at=now,
+    )
+    session.add(job)
+    session.commit()
+
+    # Create first decision
+    decision1 = MatchDecisionRecord(
+        job_id="job-match-003",
+        source_item_id="video-ghi",
+        spotify_track_id="spotify:track:111",
+        score_json={"score": 0.9},
+        decision_status="matched",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(decision1)
+    session.commit()
+
+    # Try to create a second decision with same (job_id, source_item_id)
+    decision2 = MatchDecisionRecord(
+        job_id="job-match-003",
+        source_item_id="video-ghi",
+        spotify_track_id="spotify:track:222",
+        score_json={"score": 0.95},
+        decision_status="matched",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(decision2)
+
+    # Should raise integrity error
+    with pytest.raises(Exception):  # SQLite raises IntegrityError
+        session.commit()
+
+    # Rollback to clean state
+    session.rollback()
+
+
+def test_match_decision_record_atomic_replace(session):
+    """Test that a decision can be replaced atomically without creating a duplicate row.
+
+    This test implements the acceptance criteria for micro-step 030.02:
+    A decision can be replaced atomically without creating a duplicate row.
+    It uses an upsert pattern where we delete the old row and insert a new one
+    within a transaction, ensuring no duplicate rows are created.
+    """
+    now = datetime.now(timezone.utc)
+    job = JobRecord(
+        id="job-match-004",
+        request_json={"source": "spotify:playlist:test4"},
+        state="pending",
+        created_at=now,
+    )
+    session.add(job)
+    session.commit()
+
+    # Step 1: Create initial decision
+    original_decision = MatchDecisionRecord(
+        job_id="job-match-004",
+        source_item_id="video-jkl",
+        spotify_track_id="spotify:track:old123",
+        score_json={"score": 0.7},
+        decision_status="pending",
+        reviewed=False,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(original_decision)
+    session.commit()
+
+    # Verify one row exists
+    count = session.query(MatchDecisionRecord).filter_by(
+        job_id="job-match-004",
+        source_item_id="video-jkl"
+    ).count()
+    assert count == 1
+
+    # Step 2: Atomically replace the decision
+    # Delete old row
+    session.query(MatchDecisionRecord).filter_by(
+        job_id="job-match-004",
+        source_item_id="video-jkl"
+    ).delete()
+
+    # Insert new row with updated data
+    new_decision = MatchDecisionRecord(
+        job_id="job-match-004",
+        source_item_id="video-jkl",
+        spotify_track_id="spotify:track:new456",
+        score_json={"score": 0.95},
+        decision_status="matched",
+        reviewed=True,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(new_decision)
+    session.commit()
+
+    # Step 3: Verify only one row exists with the updated data
+    count_after = session.query(MatchDecisionRecord).filter_by(
+        job_id="job-match-004",
+        source_item_id="video-jkl"
+    ).count()
+    assert count_after == 1
+
+    reloaded = session.query(MatchDecisionRecord).filter_by(
+        job_id="job-match-004",
+        source_item_id="video-jkl"
+    ).first()
+    assert reloaded is not None
+    assert reloaded.spotify_track_id == "spotify:track:new456"
+    assert reloaded.score_json == {"score": 0.95}
+    assert reloaded.decision_status == "matched"
+    assert reloaded.reviewed is True
+
+
+def test_match_decision_record_foreign_key_relationship(session):
+    """Test that match decisions can be created with a valid job reference."""
+    now = datetime.now(timezone.utc)
+
+    # Create a valid job
+    job = JobRecord(
+        id="valid-job-fk",
+        request_json={"source": "spotify:playlist:test"},
+        state="pending",
+        created_at=now,
+    )
+    session.add(job)
+    session.commit()
+
+    # Create a decision with a valid job reference
+    decision = MatchDecisionRecord(
+        job_id="valid-job-fk",
+        source_item_id="video-123",
+        spotify_track_id="spotify:track:abc123",
+        score_json={"score": 0.9},
+        decision_status="matched",
+        reviewed=True,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(decision)
+    session.commit()  # Should succeed
+
+    # Verify the decision was saved
+    reloaded = session.query(MatchDecisionRecord).filter_by(
+        job_id="valid-job-fk",
+        source_item_id="video-123"
+    ).first()
+    assert reloaded is not None
+    assert reloaded.job_id == "valid-job-fk"
+    assert reloaded.spotify_track_id == "spotify:track:abc123"
+    assert reloaded.decision_status == "matched"
+
+    # Verify the relationship works - we should be able to query the job
+    # from the decision (SQLAlchemy relationship not defined, so we query manually)
+    job_from_db = session.get(JobRecord, "valid-job-fk")
+    assert job_from_db is not None
+    assert job_from_db.id == "valid-job-fk"

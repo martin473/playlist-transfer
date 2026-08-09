@@ -204,3 +204,44 @@ class SourceTrackRecord(Base):
 
     def __repr__(self) -> str:
         return f"<SourceTrackRecord job_id={self.job_id} source_item_id={self.source_item_id} position={self.position}>"
+
+
+class MatchDecisionRecord(Base):
+    """Match decisions table storing per-track match decisions for each job.
+
+    This model represents a decision for a source track in a transfer job,
+    storing the selected Spotify ID, match score data, decision status,
+    and a reviewed flag.
+
+    A decision can be replaced atomically using upsert semantics.
+    """
+
+    __tablename__ = "match_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
+    source_item_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    spotify_track_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    score_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    decision_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    reviewed: Mapped[bool] = mapped_column(types.Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        types.DateTime(timezone=True),
+        nullable=False,
+        default=datetime.now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        types.DateTime(timezone=True),
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "source_item_id", name="uq_match_decisions_job_item"),
+        Index("ix_match_decisions_job_item", "job_id", "source_item_id"),
+        Index("ix_match_decisions_decision_status", "decision_status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<MatchDecisionRecord job_id={self.job_id} source_item_id={self.source_item_id} status={self.decision_status}>"
