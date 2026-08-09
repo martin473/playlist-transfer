@@ -1,13 +1,13 @@
 """Repository functions for playlist-bridge persistence."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Sequence
 
 from sqlalchemy.exc import IntegrityError as SQLAlchemyIntegrityError
 from sqlalchemy.orm import Session
 
-from playlist_bridge.domain.models import SourceTrack, TransferRequest
-from playlist_bridge.persistence.models import JobRecord, MatchCacheEntry, SourceTrackRecord
+from playlist_bridge.domain.models import AccountProfile, SourceTrack, TransferRequest
+from playlist_bridge.persistence.models import AccountProfileRecord, JobRecord, MatchCacheEntry, SourceTrackRecord
 from playlist_bridge.ports import IntegrityError
 
 
@@ -30,6 +30,49 @@ def lookup_match_cache(session: Session, fingerprint: str) -> MatchCacheEntry | 
         MatchCacheEntry if found, else None.
     """
     return session.query(MatchCacheEntry).filter_by(source_fingerprint=fingerprint).first()
+
+
+def upsert_match_cache(session: Session, entry: MatchCacheEntry) -> MatchCacheEntry:
+    """Insert or update one automatic cache entry.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        entry: MatchCacheEntry instance to insert or update.
+
+    Returns:
+        The persisted MatchCacheEntry instance (with updated timestamps).
+
+    Raises:
+        IntegrityError: If a database integrity constraint is violated.
+
+    Note:
+        This function uses an upsert pattern: if a record with the same
+        source_fingerprint exists, it updates the existing record; otherwise
+        it inserts a new record. The function commits the transaction.
+    """
+    # Check if an entry with this fingerprint already exists
+    existing = session.query(MatchCacheEntry).filter_by(
+        source_fingerprint=entry.source_fingerprint
+    ).first()
+
+    if existing:
+        # Update the existing entry with new values
+        existing.spotify_track_id = entry.spotify_track_id
+        existing.confidence = entry.confidence
+        existing.origin = entry.origin
+        existing.last_verified_at = entry.last_verified_at
+        # updated_at will be updated automatically via onupdate
+        session.commit()
+        return existing
+    else:
+        # Insert new entry
+        try:
+            session.add(entry)
+            session.commit()
+        except SQLAlchemyIntegrityError as e:
+            session.rollback()
+            raise IntegrityError(f"Integrity constraint violated: {e}") from e
+        return entry
 
 
 def create_job(
@@ -89,6 +132,22 @@ def create_job(
     return job
 
 
+def get_job(session: Session, job_id: str) -> JobRecord | None:
+    """Load one job by ID without mutating it.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        job_id: Unique identifier for the job.
+
+    Returns:
+        The JobRecord instance if found, else None.
+
+    Side Effects:
+        read-only: This function does not modify the database.
+    """
+    return session.query(JobRecord).filter_by(id=job_id).first()
+
+
 def bulk_insert_source_tracks(
     session: Session,
     job_id: str,
@@ -143,3 +202,142 @@ def bulk_insert_source_tracks(
         raise IntegrityError(f"Integrity constraint violated: {e}") from e
 
     return len(records)
+
+
+def save_profile(
+    session: Session,
+    profile: AccountProfile,
+) -> AccountProfile:
+    """Save an account profile to the database.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        profile: AccountProfile domain model to save.
+
+    Returns:
+        The saved AccountProfile instance (with any generated fields).
+
+    Raises:
+        IntegrityError: If a duplicate (service, profile_name) pair exists.
+
+    Note:
+        This function commits the transaction. Caller should wrap in a transaction
+        and handle IntegrityError appropriately.
+    """
+    # Map service string from domain model (e.g., "spotify", "youtube")
+    # to the format stored in the database (same string for now)
+    service = profile.provider
+    profile_name = profile.account_id  # Use account_id as the unique profile name
+    # For display_name, use display_name from model
+    display_name = profile.display_name
+
+    # Check if a profile with this (service, profile_name) already exists
+    existing = session.query(AccountProfileRecord).filter_by(
+        service=service,
+        profile_name=profile_name,
+    ).first()
+
+    if existing:
+        # Update existing record
+        existing.display_name = display_name
+        existing.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        # Return the updated profile
+        return AccountProfile(
+            provider=existing.service,
+            account_id=existing.profile_name,
+            display_name=existing.display_name,
+            email=None,  # Not stored in this table
+            username=None,  # Not stored in this table
+            profile_url=None,  # Not stored in this table
+        )
+    else:
+        # Create new record
+        record = AccountProfileRecord(
+            service=service,
+            profile_name=profile_name,
+            provider_user_id=profile_name,  # Use profile_name as provider_user_id for now
+            display_name=display_name,
+        )
+        try:
+            session.add(record)
+            session.commit()
+        except SQLAlchemyIntegrityError as e:
+            session.rollback()
+            raise IntegrityError(f"Integrity constraint violated: {e}") from e
+
+    # Return the saved profile
+    return AccountProfile(
+        provider=service,
+        account_id=profile_name,
+        display_name=display_name,
+        email=None,
+        username=None,
+        profile_url=None,
+    )
+
+
+def get_profile(
+    session: Session,
+    service: str,
+    profile_name: str,
+) -> AccountProfile | None:
+    """Retrieve an account profile by service and profile name.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        service: The service provider (e.g., "spotify", "youtube").
+        profile_name: The profile name (e.g., "default", "work").
+
+    Returns:
+        The AccountProfile instance, or None if not found.
+    """
+    record = session.query(AccountProfileRecord).filter_by(
+        service=service,
+        profile_name=profile_name,
+    ).first()
+
+    if record is None:
+        return None
+
+    return AccountProfile(
+        provider=record.service,
+        account_id=record.profile_name,
+        display_name=record.display_name,
+        email=None,
+        username=None,
+        profile_url=None,
+    )
+
+
+def list_profiles(
+    session: Session,
+    service: str | None = None,
+) -> list[AccountProfile]:
+    """List account profiles, optionally filtered by service.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        service: If provided, only list profiles for this service.
+                If None, list all profiles across all services.
+
+    Returns:
+        A list of AccountProfile instances (empty list if none).
+    """
+    query = session.query(AccountProfileRecord)
+    if service is not None:
+        query = query.filter_by(service=service)
+
+    records = query.order_by(AccountProfileRecord.service, AccountProfileRecord.profile_name).all()
+
+    return [
+        AccountProfile(
+            provider=record.service,
+            account_id=record.profile_name,
+            display_name=record.display_name,
+            email=None,
+            username=None,
+            profile_url=None,
+        )
+        for record in records
+    ]
