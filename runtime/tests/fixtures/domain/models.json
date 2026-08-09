@@ -1,0 +1,62 @@
+{
+  "ordinary_song": {
+    "source_item_id": "video_ordinary_001",
+    "normalized_title": "Bohemian Rhapsody",
+    "normalized_artist": "Queen",
+    "classification": "song",
+    "version_tokens": [],
+    "unwanted_flags": [],
+    "artist_hints": ["Queen"]
+  },
+  "unavailable_video": {
+    "source_item_id": "video_unavailable_001",
+    "normalized_title": "Unavailable Video",
+    "normalized_artist": "Unknown Artist",
+    "classification": "unknown",
+    "version_tokens": [],
+    "unwanted_flags": ["unavailable"],
+    "artist_hints": ["Unknown Artist"]
+  },
+  "spotify_candidate": {
+    "track_id": "6rqhFgbbKwnb9MLmUQDhG6",
+    "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+    "title": "Bohemian Rhapsody",
+    "artist_names": ["Queen"],
+    "album": "A Night at the Opera",
+    "duration_seconds": 354,
+    "explicit": false,
+    "isrc": "GBUM71029604",
+    "market_availability": ["US", "GB", "DE"]
+  },
+  "ambiguous_match": {
+    "source_item_id": "video_ambiguous_001",
+    "normalized_title": "Bohemian Rhapsody (Live)",
+    "normalized_artist": "Queen",
+    "classification": "song",
+    "version_tokens": ["live"],
+    "unwanted_flags": [],
+    "artist_hints": ["Queen"],
+    "alternatives": [
+      {
+        "source_item_id": "video_ambiguous_001",
+        "destination_uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "destination_track_id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "destination_title": "Bohemian Rhapsody",
+        "destination_artist_names": ["Queen"],
+        "score": 0.85,
+        "decision_type": "accepted",
+        "confidence": 0.9
+      },
+      {
+        "source_item_id": "video_ambiguous_001",
+        "destination_uri": "spotify:track:7yRq6c1J8vL3Z6xS3KxgYk",
+        "destination_track_id": "7yRq6c1J8vL3Z6xS3KxgYk",
+        "destination_title": "Bohemian Rhapsody (Live)",
+        "destination_artist_names": ["Queen"],
+        "score": 0.45,
+        "decision_type": "review",
+        "confidence": 0.6
+      }
+    ]
+  }
+}

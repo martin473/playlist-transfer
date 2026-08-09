@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+import unittest
 from pathlib import Path
 
 import pytest
@@ -360,3 +361,134 @@ class TestYouTubeAuthConstants:
         """Test that DEFAULT_REDIRECT_PORT is an integer."""
         assert isinstance(DEFAULT_REDIRECT_PORT, int)
         assert DEFAULT_REDIRECT_PORT == 8080
+
+
+class TestRefreshGoogleCredentials:
+    """Tests for the refresh_google_credentials function."""
+
+    def test_refresh_google_credentials_returns_valid_credentials_when_not_expired(
+        self,
+    ) -> None:
+        """Test that refresh returns the stored credentials without refreshing if not expired."""
+        from unittest.mock import MagicMock
+
+        from playlist_bridge.auth.youtube import refresh_google_credentials
+        from playlist_bridge.domain.enums import SourceService
+
+        # Create a mock credential store
+        mock_store = MagicMock()
+        mock_store.load.return_value = {
+            "token": "valid_token",
+            "refresh_token": "refresh_token_123",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": "client_123",
+            "client_secret": "secret_456",
+            "scopes": ["https://www.googleapis.com/auth/youtube"],
+        }
+
+        # Create a mock Request object
+        mock_request = MagicMock()
+
+        # Create a mock credentials object with expired=False
+        from google.oauth2.credentials import Credentials
+
+        # Create a MagicMock that behaves like Credentials
+        mock_creds = MagicMock(spec=Credentials)
+        # Set the attributes that will be accessed
+        type(mock_creds).expired = unittest.mock.PropertyMock(return_value=False)
+        mock_creds.token = "valid_token"
+        mock_creds.refresh_token = "refresh_token_123"
+        mock_creds.token_uri = "https://oauth2.googleapis.com/token"
+        mock_creds.client_id = "client_123"
+        mock_creds.client_secret = "secret_456"
+        mock_creds.scopes = ["https://www.googleapis.com/auth/youtube"]
+
+        # Mock the Credentials constructor to return our mock
+        with unittest.mock.patch(
+            "playlist_bridge.auth.youtube.Credentials",
+            return_value=mock_creds,
+        ):
+            result = refresh_google_credentials("test_profile", mock_store, mock_request)
+
+            # Should return the credentials without refreshing
+            assert result is mock_creds
+            # Should not have called refresh or save
+            mock_creds.refresh.assert_not_called()
+            mock_store.save.assert_not_called()
+
+    def test_refresh_google_credentials_refreshes_expired_credentials_and_saves(
+        self,
+    ) -> None:
+        """Test that refresh refreshes expired credentials and writes the new payload once."""
+        from unittest.mock import MagicMock
+
+        from playlist_bridge.auth.youtube import refresh_google_credentials
+        from playlist_bridge.domain.enums import SourceService
+
+        # Create a mock credential store
+        mock_store = MagicMock()
+        mock_store.load.return_value = {
+            "token": "expired_token",
+            "refresh_token": "refresh_token_123",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": "client_123",
+            "client_secret": "secret_456",
+            "scopes": ["https://www.googleapis.com/auth/youtube"],
+        }
+
+        # Create a mock Request object
+        mock_request = MagicMock()
+
+        # Create a mock credentials object with expired=True
+        from google.oauth2.credentials import Credentials
+
+        mock_creds = MagicMock(spec=Credentials)
+        # Set the attributes that will be accessed
+        type(mock_creds).expired = unittest.mock.PropertyMock(return_value=True)
+        mock_creds.token = "expired_token"
+        mock_creds.refresh_token = "refresh_token_123"
+        mock_creds.token_uri = "https://oauth2.googleapis.com/token"
+        mock_creds.client_id = "client_123"
+        mock_creds.client_secret = "secret_456"
+        mock_creds.scopes = ["https://www.googleapis.com/auth/youtube"]
+
+        # Mock the refresh method to update the token
+        def refresh_side_effect(request):
+            mock_creds.token = "new_refreshed_token"
+
+        mock_creds.refresh = MagicMock(side_effect=refresh_side_effect)
+
+        # Mock the Credentials constructor to return our mock
+        with unittest.mock.patch(
+            "playlist_bridge.auth.youtube.Credentials",
+            return_value=mock_creds,
+        ):
+            # Mock serialize_google_credentials to return serialized payload
+            with unittest.mock.patch(
+                "playlist_bridge.auth.youtube.serialize_google_credentials",
+                return_value=json.dumps(
+                    {
+                        "token": "new_refreshed_token",
+                        "refresh_token": "refresh_token_123",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                        "client_id": "client_123",
+                        "client_secret": "secret_456",
+                        "scopes": ["https://www.googleapis.com/auth/youtube"],
+                    }
+                ),
+            ):
+                result = refresh_google_credentials("test_profile", mock_store, mock_request)
+
+                # Should have called refresh
+                mock_creds.refresh.assert_called_once_with(mock_request)
+                # Should have saved the refreshed credentials
+                mock_store.save.assert_called_once()
+                # The save should be called with the correct service and payload
+                call_args = mock_store.save.call_args
+                assert call_args[0][0] == SourceService.YOUTUBE
+                assert call_args[0][1] == "test_profile"
+                payload = call_args[0][2]
+                assert payload["token"] == "new_refreshed_token"
+                # Should return the refreshed credentials
+                assert result is mock_creds
+                assert result.token == "new_refreshed_token"

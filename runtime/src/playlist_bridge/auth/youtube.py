@@ -4,10 +4,13 @@ import json
 from pathlib import Path
 from typing import Final, Sequence
 
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
 from playlist_bridge.ports import CredentialCorruptionError
 from playlist_bridge.settings import GoogleOAuthSettings
+from playlist_bridge.domain.enums import SourceService
+from playlist_bridge.providers.errors import AuthenticationRequired, TemporaryProviderFailure
 
 # Default OAuth scopes for YouTube Data API v3
 DEFAULT_YOUTUBE_SCOPES: Final[tuple[str, ...]] = (
@@ -247,3 +250,132 @@ def deserialize_google_credentials(serialized: str, scopes: Sequence[str]) -> Cr
             profile_name="unknown",
             safe_message=safe_message,
         ) from e
+
+
+def refresh_google_credentials(
+    profile_name: str,
+    credentials: CredentialStore,
+    request: Request,
+) -> Credentials:
+    """Refresh expired Google credentials that contain a refresh token.
+
+    This function loads stored credentials for the given profile, checks if they
+    are expired and have a refresh token, refreshes them using the provided
+    Request object, and persists the refreshed credential payload back to the
+    credential store.
+
+    Args:
+        profile_name: The name of the profile to refresh credentials for.
+        credentials: The credential store to load from and save to.
+        request: A google.auth.transport.requests.Request object for the refresh.
+
+    Returns:
+        Credentials: The refreshed credentials object.
+
+    Raises:
+        AuthenticationRequired: If no credentials are stored for the profile,
+            or the stored credentials cannot be refreshed (e.g., no refresh token,
+            refresh token expired).
+        TemporaryProviderFailure: If the refresh request fails due to a network
+            issue or the provider returns a transient error.
+        CredentialCorruptionError: If the stored credentials are malformed.
+
+    Side Effects:
+        provider_network: Makes a network request to Google's OAuth endpoint.
+        os_keychain_write: Writes the refreshed payload back to the keychain.
+    """
+    from playlist_bridge.auth.youtube import deserialize_google_credentials
+    from playlist_bridge.auth.youtube import serialize_google_credentials
+    from playlist_bridge.auth.youtube import DEFAULT_YOUTUBE_SCOPES
+
+    # Load stored credentials from the keychain
+    payload = credentials.load(SourceService.YOUTUBE, profile_name)
+    if payload is None:
+        raise AuthenticationRequired(
+            service="youtube",
+            profile_name=profile_name,
+            safe_message=f"No credentials found for profile: {profile_name}",
+        )
+
+    # Deserialize the stored payload into a Credentials object
+    try:
+        # Extract scopes from the payload if present, otherwise use defaults
+        scopes = payload.get("scopes", list(DEFAULT_YOUTUBE_SCOPES))
+        if not isinstance(scopes, list):
+            # If scopes is not a list, use defaults
+            scopes = list(DEFAULT_YOUTUBE_SCOPES)
+
+        # Build a Credentials object from the stored payload
+        stored_creds = Credentials(
+            token=payload.get("token"),
+            refresh_token=payload.get("refresh_token"),
+            token_uri=payload.get("token_uri"),
+            client_id=payload.get("client_id"),
+            client_secret=payload.get("client_secret"),
+            scopes=scopes,
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        raise CredentialCorruptionError(
+            service="youtube",
+            profile_name=profile_name,
+            safe_message=f"Failed to reconstruct credentials from stored payload: {type(e).__name__}",
+        ) from e
+
+    # Check if we have a refresh token
+    if stored_creds.refresh_token is None:
+        raise AuthenticationRequired(
+            service="youtube",
+            profile_name=profile_name,
+            safe_message=f"No refresh token available for profile: {profile_name}",
+        )
+
+    # Check if credentials are already expired
+    # Credentials.expired returns True if token is expired or token is None
+    if not stored_creds.expired:
+        # Credentials are still valid; return them without persisting
+        return stored_creds
+
+    # Attempt to refresh the credentials
+    try:
+        stored_creds.refresh(request)
+    except Exception as e:
+        # The google-auth library raises various exceptions for refresh failures
+        # Map them to appropriate domain errors
+        error_message = str(e).lower()
+        if "invalid_grant" in error_message or "refresh token" in error_message:
+            raise AuthenticationRequired(
+                service="youtube",
+                profile_name=profile_name,
+                safe_message=f"Failed to refresh credentials: refresh token invalid or revoked",
+            ) from e
+        elif "timeout" in error_message or "connection" in error_message:
+            raise TemporaryProviderFailure(
+                service="youtube",
+                profile_name=profile_name,
+                safe_message=f"Network error during credential refresh: {type(e).__name__}",
+            ) from e
+        else:
+            # Treat other errors as temporary failures (they may be retried)
+            raise TemporaryProviderFailure(
+                service="youtube",
+                profile_name=profile_name,
+                safe_message=f"Failed to refresh credentials: {type(e).__name__}",
+            ) from e
+
+    # Serialize the refreshed credentials and save back to the keychain
+    try:
+        serialized = serialize_google_credentials(stored_creds)
+        # Re-parse to get the payload dictionary
+        refreshed_payload = json.loads(serialized)
+        credentials.save(SourceService.YOUTUBE, profile_name, refreshed_payload)
+    except (CredentialCorruptionError, json.JSONDecodeError) as e:
+        # Re-raise CredentialCorruptionError as-is
+        if isinstance(e, CredentialCorruptionError):
+            raise
+        raise CredentialCorruptionError(
+            service="youtube",
+            profile_name=profile_name,
+            safe_message=f"Failed to serialize refreshed credentials: {type(e).__name__}",
+        ) from e
+
+    return stored_creds

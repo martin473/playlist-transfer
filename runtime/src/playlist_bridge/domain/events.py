@@ -181,6 +181,46 @@ class CompletionEvent(BaseModel):
     timestamp: str = Field(description="ISO 8601 timestamp")
 
 
+class ReviewRequiredEvent(BaseModel):
+    """Emitted when a track requires manual review during matching.
+
+    Attributes:
+        type: Literal event type discriminator ('review_required').
+        job_id: Unique identifier of the job.
+        source_track_id: Identifier of the source track requiring review.
+        reason: Reason the track requires manual review.
+        candidates_count: Number of candidate matches found.
+        timestamp: ISO 8601 timestamp when this event was emitted.
+    """
+
+    type: Literal["review_required"] = Field(description="Event type discriminator")
+    job_id: str = Field(description="Unique job identifier")
+    source_track_id: str = Field(description="Source track identifier")
+    reason: str = Field(description="Reason for manual review")
+    candidates_count: int = Field(description="Number of candidate matches")
+    timestamp: str = Field(description="ISO 8601 timestamp")
+
+
+from typing import Union
+from pydantic import TypeAdapter
+
+# Type alias for discriminated union of all JSONL event types
+JobEvent = Union[
+    JobStartedEvent,
+    SourceProgressEvent,
+    MatchProgressEvent,
+    ReviewRequiredEvent,
+    WriteProgressEvent,
+    VerificationProgressEvent,
+    FailureEvent,
+    CancellationEvent,
+    CompletionEvent,
+]
+
+# Type adapter for validating and parsing JSONL events
+JobEventAdapter = TypeAdapter(JobEvent)
+
+
 # Module-level aliases for verification tests
 cancellation = CancellationEvent
 completion = CompletionEvent

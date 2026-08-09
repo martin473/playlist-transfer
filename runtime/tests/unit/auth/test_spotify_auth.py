@@ -582,3 +582,200 @@ class TestAuthenticateSpotifyProfile:
         profile_fields = set(AccountProfile.model_fields.keys())
         assert "access_token" not in profile_fields
         assert "refresh_token" not in profile_fields
+
+
+class TestCreateAuthenticatedSpotifyClient:
+    """Tests for create_authenticated_spotify_client function."""
+
+    def test_creates_client_with_valid_token(self) -> None:
+        """Test that a Spotify client is created when a valid token exists."""
+        from playlist_bridge.settings import create_authenticated_spotify_client
+        from playlist_bridge.providers.errors import AuthenticationRequired
+
+        settings = SpotifyOAuthSettings(
+            client_id="test-client-id",
+            redirect_uri="http://localhost:8080/callback",
+        )
+        mock_credentials = MagicMock()
+        mock_token_info = {
+            "access_token": "mock-access-token",
+            "refresh_token": "mock-refresh-token",
+            "expires_in": 3600,
+        }
+
+        with patch(
+            "playlist_bridge.settings.KeyringCacheHandler"
+        ) as mock_cache_handler_class:
+            mock_cache_handler = MagicMock()
+            mock_cache_handler.get_cached_token.return_value = mock_token_info
+            mock_cache_handler_class.return_value = mock_cache_handler
+
+            with patch("playlist_bridge.settings.spotipy.Spotify") as mock_spotify_class:
+                mock_spotify_client = MagicMock()
+                mock_spotify_class.return_value = mock_spotify_client
+
+                result = create_authenticated_spotify_client(
+                    profile_name="test-profile",
+                    settings=settings,
+                    credentials=mock_credentials,
+                )
+
+                # Verify the cache handler was created with correct arguments
+                mock_cache_handler_class.assert_called_once_with(
+                    service="spotify",
+                    profile_name="test-profile",
+                    store=mock_credentials,
+                )
+
+                # Verify get_cached_token was called
+                mock_cache_handler.get_cached_token.assert_called_once()
+
+                # Verify Spotify client was created with the access token
+                mock_spotify_class.assert_called_once_with(auth="mock-access-token")
+
+                # Verify the result is the Spotify client
+                assert result == mock_spotify_client
+
+    def test_raises_authentication_required_when_no_token(self) -> None:
+        """Test that AuthenticationRequired is raised when no token exists."""
+        from playlist_bridge.settings import create_authenticated_spotify_client
+        from playlist_bridge.providers.errors import AuthenticationRequired
+
+        settings = SpotifyOAuthSettings(
+            client_id="test-client-id",
+            redirect_uri="http://localhost:8080/callback",
+        )
+        mock_credentials = MagicMock()
+
+        with patch(
+            "playlist_bridge.settings.KeyringCacheHandler"
+        ) as mock_cache_handler_class:
+            mock_cache_handler = MagicMock()
+            mock_cache_handler.get_cached_token.return_value = None
+            mock_cache_handler_class.return_value = mock_cache_handler
+
+            with pytest.raises(AuthenticationRequired) as exc_info:
+                create_authenticated_spotify_client(
+                    profile_name="test-profile",
+                    settings=settings,
+                    credentials=mock_credentials,
+                )
+
+            assert "No valid token found for profile 'test-profile'" in str(
+                exc_info.value
+            )
+
+    def test_raises_authentication_required_when_token_missing_access_token(
+        self,
+    ) -> None:
+        """Test that AuthenticationRequired is raised when token lacks access_token."""
+        from playlist_bridge.settings import create_authenticated_spotify_client
+        from playlist_bridge.providers.errors import AuthenticationRequired
+
+        settings = SpotifyOAuthSettings(
+            client_id="test-client-id",
+            redirect_uri="http://localhost:8080/callback",
+        )
+        mock_credentials = MagicMock()
+        mock_token_info = {"refresh_token": "mock-refresh-token"}  # No access_token
+
+        with patch(
+            "playlist_bridge.settings.KeyringCacheHandler"
+        ) as mock_cache_handler_class:
+            mock_cache_handler = MagicMock()
+            mock_cache_handler.get_cached_token.return_value = mock_token_info
+            mock_cache_handler_class.return_value = mock_cache_handler
+
+            with pytest.raises(AuthenticationRequired) as exc_info:
+                create_authenticated_spotify_client(
+                    profile_name="test-profile",
+                    settings=settings,
+                    credentials=mock_credentials,
+                )
+
+            assert "Token for profile 'test-profile' missing access_token" in str(
+                exc_info.value
+            )
+
+    def test_raises_value_error_for_empty_profile_name(self) -> None:
+        """Test that ValueError is raised when profile_name is empty."""
+        from playlist_bridge.settings import create_authenticated_spotify_client
+
+        settings = SpotifyOAuthSettings(
+            client_id="test-client-id",
+            redirect_uri="http://localhost:8080/callback",
+        )
+        mock_credentials = MagicMock()
+
+        with pytest.raises(ValueError, match="profile_name must not be empty"):
+            create_authenticated_spotify_client(
+                profile_name="",
+                settings=settings,
+                credentials=mock_credentials,
+            )
+
+        with pytest.raises(ValueError, match="profile_name must not be empty"):
+            create_authenticated_spotify_client(
+                profile_name="   ",
+                settings=settings,
+                credentials=mock_credentials,
+            )
+
+    def test_raises_value_error_for_none_settings(self) -> None:
+        """Test that ValueError is raised when settings is None."""
+        from playlist_bridge.settings import create_authenticated_spotify_client
+
+        mock_credentials = MagicMock()
+
+        with pytest.raises(ValueError, match="settings must not be None"):
+            create_authenticated_spotify_client(
+                profile_name="test-profile",
+                settings=None,  # type: ignore
+                credentials=mock_credentials,
+            )
+
+    def test_raises_value_error_for_none_credentials(self) -> None:
+        """Test that ValueError is raised when credentials is None."""
+        from playlist_bridge.settings import create_authenticated_spotify_client
+
+        settings = SpotifyOAuthSettings(
+            client_id="test-client-id",
+            redirect_uri="http://localhost:8080/callback",
+        )
+
+        with pytest.raises(ValueError, match="credentials must not be None"):
+            create_authenticated_spotify_client(
+                profile_name="test-profile",
+                settings=settings,
+                credentials=None,  # type: ignore
+            )
+
+    def test_wraps_unexpected_errors_as_temporary_provider_failure(self) -> None:
+        """Test that unexpected errors are wrapped as TemporaryProviderFailure."""
+        from playlist_bridge.settings import create_authenticated_spotify_client
+        from playlist_bridge.providers.errors import TemporaryProviderFailure
+
+        settings = SpotifyOAuthSettings(
+            client_id="test-client-id",
+            redirect_uri="http://localhost:8080/callback",
+        )
+        mock_credentials = MagicMock()
+
+        with patch(
+            "playlist_bridge.settings.KeyringCacheHandler"
+        ) as mock_cache_handler_class:
+            mock_cache_handler = MagicMock()
+            # Simulate an unexpected error when getting cached token
+            mock_cache_handler.get_cached_token.side_effect = RuntimeError(
+                "Unexpected error"
+            )
+            mock_cache_handler_class.return_value = mock_cache_handler
+
+            with pytest.raises(TemporaryProviderFailure) as exc_info:
+                create_authenticated_spotify_client(
+                    profile_name="test-profile",
+                    settings=settings,
+                    credentials=mock_credentials,
+                )
+
+            assert "Failed to load Spotify token" in str(exc_info.value)
