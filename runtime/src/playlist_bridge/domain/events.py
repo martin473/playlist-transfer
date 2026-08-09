@@ -143,7 +143,47 @@ class FailureEvent(BaseModel):
     timestamp: str = Field(description="ISO 8601 timestamp")
 
 
+class CancellationEvent(BaseModel):
+    """Emitted when a transfer job is cancelled.
+
+    Attributes:
+        type: Literal event type discriminator ('cancellation').
+        job_id: Unique identifier of the job.
+        reason: Optional reason for the cancellation.
+        timestamp: ISO 8601 timestamp when the cancellation was emitted.
+    """
+
+    type: Literal["cancellation"] = Field(description="Event type discriminator")
+    job_id: str = Field(description="Unique job identifier")
+    reason: Optional[str] = Field(default=None, description="Reason for cancellation")
+    timestamp: str = Field(description="ISO 8601 timestamp")
+
+
+class CompletionEvent(BaseModel):
+    """Emitted when a transfer job completes successfully.
+
+    Attributes:
+        type: Literal event type discriminator ('completion').
+        job_id: Unique identifier of the job.
+        total_tracks: Total number of tracks processed.
+        matched_count: Number of tracks successfully matched.
+        written_count: Number of tracks written to destination.
+        skipped_count: Number of tracks skipped.
+        timestamp: ISO 8601 timestamp when the completion was emitted.
+    """
+
+    type: Literal["completion"] = Field(description="Event type discriminator")
+    job_id: str = Field(description="Unique job identifier")
+    total_tracks: int = Field(description="Total number of tracks processed")
+    matched_count: int = Field(description="Number of tracks successfully matched")
+    written_count: int = Field(description="Number of tracks written to destination")
+    skipped_count: int = Field(description="Number of tracks skipped")
+    timestamp: str = Field(description="ISO 8601 timestamp")
+
+
 # Module-level aliases for verification tests
+cancellation = CancellationEvent
+completion = CompletionEvent
 failure = FailureEvent
 type = type
 
