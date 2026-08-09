@@ -843,3 +843,110 @@ class TestSaveProfile:
 
         profiles = list_profiles(session=in_memory_session)
         assert profiles == []
+
+
+class TestGetProfile:
+    """Tests for get_profile function."""
+
+    def test_get_profile_returns_existing_profile(self, in_memory_session: Session):
+        """get_profile should return a profile when it exists."""
+        from playlist_bridge.domain.models import AccountProfile
+        from playlist_bridge.persistence.repositories import get_profile, save_profile
+
+        # Save a profile
+        profile = AccountProfile(
+            provider="spotify",
+            account_id="test_user",
+            display_name="Test User",
+        )
+        save_profile(session=in_memory_session, profile=profile)
+
+        # Retrieve it
+        result = get_profile(
+            session=in_memory_session,
+            service="spotify",
+            profile_name="test_user",
+        )
+
+        assert result is not None
+        assert isinstance(result, AccountProfile)
+        assert result.provider == "spotify"
+        assert result.account_id == "test_user"
+        assert result.display_name == "Test User"
+
+    def test_get_profile_returns_none_for_missing_profile(self, in_memory_session: Session):
+        """get_profile should return None when the profile does not exist."""
+        from playlist_bridge.persistence.repositories import get_profile
+
+        result = get_profile(
+            session=in_memory_session,
+            service="spotify",
+            profile_name="non_existent_user",
+        )
+
+        assert result is None
+
+    def test_get_profile_respects_service_filter(self, in_memory_session: Session):
+        """get_profile should only match exact service and profile_name."""
+        from playlist_bridge.domain.models import AccountProfile
+        from playlist_bridge.persistence.repositories import get_profile, save_profile
+
+        # Save a spotify profile
+        spotify_profile = AccountProfile(
+            provider="spotify",
+            account_id="user123",
+            display_name="Spotify User",
+        )
+        save_profile(session=in_memory_session, profile=spotify_profile)
+
+        # Save a youtube profile with same account_id
+        youtube_profile = AccountProfile(
+            provider="youtube",
+            account_id="user123",
+            display_name="YouTube User",
+        )
+        save_profile(session=in_memory_session, profile=youtube_profile)
+
+        # Get spotify profile
+        result = get_profile(
+            session=in_memory_session,
+            service="spotify",
+            profile_name="user123",
+        )
+
+        assert result is not None
+        assert result.provider == "spotify"
+        assert result.account_id == "user123"
+
+        # Get youtube profile
+        result = get_profile(
+            session=in_memory_session,
+            service="youtube",
+            profile_name="user123",
+        )
+
+        assert result is not None
+        assert result.provider == "youtube"
+        assert result.account_id == "user123"
+
+    def test_get_profile_none_when_wrong_service(self, in_memory_session: Session):
+        """get_profile returns None when service doesn't match."""
+        from playlist_bridge.domain.models import AccountProfile
+        from playlist_bridge.persistence.repositories import get_profile, save_profile
+
+        # Save a spotify profile
+        profile = AccountProfile(
+            provider="spotify",
+            account_id="user123",
+            display_name="Spotify User",
+        )
+        save_profile(session=in_memory_session, profile=profile)
+
+        # Try to get it with a different service
+        result = get_profile(
+            session=in_memory_session,
+            service="youtube",
+            profile_name="user123",
+        )
+
+        assert result is None
