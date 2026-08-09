@@ -293,30 +293,56 @@ class TransferRequest(BaseModel):
         return self
 
 
+
+
 class MatchDecision(BaseModel):
     """Decision for matching a source track to a destination track.
 
     Attributes:
         source_item_id: Identifier for the source item.
-        destination_uri: Destination track URI (e.g., spotify:track:...).
-        destination_track_id: Destination track ID.
-        destination_title: Destination track title.
-        destination_artist_names: Destination artist names.
-        score: Match score (0.0 to 1.0).
-        decision_type: Type of decision (accepted, review, rejected, etc.).
-        confidence: Confidence level (0.0 to 1.0).
+        status: Status of the match decision ('matched' or 'unmatched').
+        selected_candidate: The selected Spotify candidate (if matched).
+        ranked_alternatives: Optional ranked list of alternative candidates.
+        score: Match score details (if matched).
+        reason: Reason for the decision.
     """
 
     model_config = {"extra": "forbid"}
 
     source_item_id: str = Field(description="Identifier for the source item")
-    destination_uri: str = Field(description="Destination track URI")
-    destination_track_id: str = Field(description="Destination track ID")
-    destination_title: str = Field(description="Destination track title")
-    destination_artist_names: list[str] = Field(description="Destination artist names")
-    score: float = Field(description="Match score", ge=0.0, le=1.0)
-    decision_type: str = Field(description="Type of decision")
-    confidence: float = Field(description="Confidence level", ge=0.0, le=1.0)
+    status: Literal["matched", "unmatched"] = Field(description="Status of the match decision")
+    selected_candidate: Optional[SpotifyCandidate] = Field(
+        default=None,
+        description="The selected Spotify candidate (required if status is 'matched')",
+    )
+    ranked_alternatives: list[SpotifyCandidate] = Field(
+        default_factory=list,
+        description="Optional ranked list of alternative candidates",
+    )
+    score: Optional[MatchScore] = Field(
+        default=None,
+        description="Match score details (required if status is 'matched')",
+    )
+    reason: str = Field(description="Reason for the decision")
+
+    @model_validator(mode="after")
+    def validate_match_decision_rules(self) -> "MatchDecision":
+        """Validate business rules for match decisions.
+
+        - A matched decision must have a selected_candidate and a score.
+        - An unmatched decision must not have a selected_candidate or a score.
+        """
+        if self.status == "matched":
+            if self.selected_candidate is None:
+                raise ValueError("Matched decision must have a selected_candidate")
+            if self.score is None:
+                raise ValueError("Matched decision must have a score")
+        elif self.status == "unmatched":
+            if self.selected_candidate is not None:
+                raise ValueError("Unmatched decision must not have a selected_candidate")
+            if self.score is not None:
+                raise ValueError("Unmatched decision must not have a score")
+        return self
 
     @field_validator("source_item_id")
     @classmethod
@@ -326,36 +352,12 @@ class MatchDecision(BaseModel):
             raise ValueError("source_item_id cannot be empty")
         return v
 
-    @field_validator("destination_uri")
+    @field_validator("reason")
     @classmethod
-    def validate_destination_uri(cls, v: str) -> str:
-        """Validate that destination_uri is not empty."""
+    def validate_reason(cls, v: str) -> str:
+        """Validate that reason is not empty."""
         if not v or not v.strip():
-            raise ValueError("destination_uri cannot be empty")
-        return v
-
-    @field_validator("destination_track_id")
-    @classmethod
-    def validate_destination_track_id(cls, v: str) -> str:
-        """Validate that destination_track_id is not empty."""
-        if not v or not v.strip():
-            raise ValueError("destination_track_id cannot be empty")
-        return v
-
-    @field_validator("destination_title")
-    @classmethod
-    def validate_destination_title(cls, v: str) -> str:
-        """Validate that destination_title is not empty."""
-        if not v or not v.strip():
-            raise ValueError("destination_title cannot be empty")
-        return v
-
-    @field_validator("destination_artist_names")
-    @classmethod
-    def validate_destination_artist_names(cls, v: list[str]) -> list[str]:
-        """Validate that destination_artist_names is not empty."""
-        if not v:
-            raise ValueError("destination_artist_names cannot be empty")
+            raise ValueError("Reason cannot be empty")
         return v
 
 
@@ -363,28 +365,35 @@ class MatchScore(BaseModel):
     """Score for a match between a source and destination track.
 
     Attributes:
-        source_item_id: Identifier for the source item.
-        destination_uri: Destination track URI.
-        score: Match score (0.0 to 1.0).
         title_similarity: Similarity score for title (0.0 to 1.0).
         artist_similarity: Similarity score for artists (0.0 to 1.0).
         duration_similarity: Similarity score for duration (0.0 to 1.0).
         version_agreement: Agreement score for version tokens (0.0 to 1.0).
-        explicit_agreement: Agreement score for explicit state (0.0 to 1.0).
+        unwanted_version_penalty: Penalty for unwanted version tokens (0.0 to 1.0).
+        explicit_state: Agreement score for explicit state (0.0 to 1.0).
         total_score: Aggregated total score (0.0 to 1.0).
+        reasons: List of reasons for the score.
     """
 
     model_config = {"extra": "forbid"}
 
-    source_item_id: str = Field(description="Identifier for the source item")
-    destination_uri: str = Field(description="Destination track URI")
-    score: float = Field(description="Match score", ge=0.0, le=1.0)
     title_similarity: float = Field(description="Title similarity", ge=0.0, le=1.0)
     artist_similarity: float = Field(description="Artist similarity", ge=0.0, le=1.0)
     duration_similarity: float = Field(description="Duration similarity", ge=0.0, le=1.0)
     version_agreement: float = Field(description="Version agreement", ge=0.0, le=1.0)
-    explicit_agreement: float = Field(description="Explicit agreement", ge=0.0, le=1.0)
+    unwanted_version_penalty: float = Field(description="Unwanted version penalty", ge=0.0, le=1.0)
+    explicit_state: float = Field(description="Explicit state agreement", ge=0.0, le=1.0)
     total_score: float = Field(description="Aggregated total score", ge=0.0, le=1.0)
+    reasons: list[str] = Field(default_factory=list, description="Reasons for the score")
+
+    @field_validator("reasons", mode="after")
+    @classmethod
+    def validate_reasons(cls, v: list[str]) -> list[str]:
+        """Validate that reasons are not empty or whitespace-only strings."""
+        for reason in v:
+            if not reason or not reason.strip():
+                raise ValueError("Reasons cannot be empty or whitespace-only strings")
+        return v
 
 
 class NormalizedTrackHint(BaseModel):

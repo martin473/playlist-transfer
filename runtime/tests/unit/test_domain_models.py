@@ -434,7 +434,7 @@ class TestMatchDecision:
             )
 
         errors = exc_info.value.errors()
-        assert any("Matched decision must have a selected candidate" in err.get("msg", "") for err in errors)
+        assert any("Matched decision must have a selected_candidate" in err.get("msg", "") for err in errors)
 
     def test_matched_decision_without_score_is_rejected(self) -> None:
         """Test that a matched decision without a score is rejected."""
@@ -481,7 +481,7 @@ class TestMatchDecision:
             )
 
         errors = exc_info.value.errors()
-        assert any("Unmatched decision must not have a selected candidate" in err.get("msg", "") for err in errors)
+        assert any("Unmatched decision must not have a selected_candidate" in err.get("msg", "") for err in errors)
 
     def test_unmatched_decision_with_score_is_rejected(self) -> None:
         """Test that an unmatched decision with a score is rejected."""
@@ -517,8 +517,8 @@ class TestMatchDecision:
             )
 
         errors = exc_info.value.errors()
-        # The validator raises ValueError with a specific message
-        assert any("status must be one of" in err.get("msg", "").lower() for err in errors)
+        # Check that the error is about the status field having an invalid value
+        assert any("Input should be 'matched' or 'unmatched'" in err.get("msg", "") for err in errors)
 
     def test_decision_with_empty_reason_is_rejected(self) -> None:
         """Test that a decision with an empty reason is rejected."""
