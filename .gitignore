@@ -37,6 +37,10 @@ node_modules/
 build/
 dist/
 
+# macOS metadata
+.DS_Store
+Thumbs.db
+
 # IDE directories
 .vscode/
 .idea/
