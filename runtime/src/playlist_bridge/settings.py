@@ -3,7 +3,13 @@
 import os
 from pathlib import Path
 
+import spotipy
 from pydantic import BaseModel, Field
+
+from playlist_bridge.credentials.store import KeyringCacheHandler
+from playlist_bridge.domain.enums import SourceService
+from playlist_bridge.ports import CredentialCorruptionError, CredentialStore
+from playlist_bridge.providers.errors import AuthenticationRequired, TemporaryProviderFailure
 
 
 class SpotifyOAuthSettings(BaseModel):
@@ -151,3 +157,92 @@ def load_spotify_settings_from_config() -> SpotifyOAuthSettings:
     # or dedicated config file). This ensures the expected function signature
     # and behavior is available for tests and consumers.
     return load_spotify_settings_from_environment()
+
+
+def create_authenticated_spotify_client(
+    profile_name: str,
+    settings: SpotifyOAuthSettings,
+    credentials: CredentialStore,
+    *,
+    open_browser: bool = False,
+) -> spotipy.Spotify:
+    """Return a Spotify client only when a valid token is available.
+
+    This function loads the Spotify token for the given profile from the
+    credential store using the KeyringCacheHandler. If a valid token exists,
+    it creates and returns an authenticated Spotify client. If no token is
+    found or the token is invalid, it raises AuthenticationRequired.
+
+    Args:
+        profile_name: The name of the profile to authenticate.
+        settings: Spotify OAuth settings containing client_id, redirect_uri,
+            and scopes.
+        credentials: Credential store for OAuth token retrieval.
+        open_browser: Whether to open the browser automatically for
+            authorization. Defaults to False (no interactive auth).
+
+    Returns:
+        spotipy.Spotify: An authenticated Spotify client.
+
+    Raises:
+        AuthenticationRequired: If no valid token is available for the profile.
+        CredentialCorruptionError: If the stored token data is malformed.
+        TemporaryProviderFailure: If the Spotify provider experiences a
+            temporary failure.
+        ValueError: If profile_name, settings, or credentials is invalid.
+    """
+    if not profile_name or not profile_name.strip():
+        raise ValueError("profile_name must not be empty")
+    if settings is None:
+        raise ValueError("settings must not be None")
+    if credentials is None:
+        raise ValueError("credentials must not be None")
+
+    # Create a cache handler that uses the CredentialStore
+    cache_handler = KeyringCacheHandler(
+        service=SourceService.SPOTIFY,
+        profile_name=profile_name,
+        store=credentials,
+    )
+
+    try:
+        # Load the cached token from the keyring
+        token_info = cache_handler.get_cached_token()
+
+        # If no token exists or token is empty, raise AuthenticationRequired
+        if not token_info or not isinstance(token_info, dict):
+            raise AuthenticationRequired(
+                service="spotify",
+                operation="authenticate",
+                safe_message=f"No valid token found for profile '{profile_name}'",
+            )
+
+        # Check if the token has an access_token field
+        access_token = token_info.get("access_token")
+        if not access_token:
+            raise AuthenticationRequired(
+                service="spotify",
+                operation="authenticate",
+                safe_message=f"Token for profile '{profile_name}' missing access_token",
+            )
+
+        # Create an authenticated Spotify client
+        # Note: The open_browser parameter is included for consistency with the
+        # contract but is not used when we already have a valid token.
+        # We pass it to the Spotify client constructor if needed, but spotipy's
+        # Spotify client doesn't accept open_browser directly.
+        return spotipy.Spotify(auth=access_token)
+
+    except CredentialCorruptionError:
+        # Re-raise as-is (the contract includes this error type)
+        raise
+    except AuthenticationRequired:
+        # Re-raise as-is (the contract includes this error type)
+        raise
+    except Exception as e:
+        # Wrap unexpected errors as TemporaryProviderFailure
+        raise TemporaryProviderFailure(
+            service="spotify",
+            operation="authenticate",
+            safe_message=f"Failed to load Spotify token: {e}",
+        ) from e
