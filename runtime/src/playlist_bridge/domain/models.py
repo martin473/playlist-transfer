@@ -1,5 +1,6 @@
 """Domain models for the playlist bridge."""
 
+from datetime import datetime
 from typing import Optional, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -145,46 +146,54 @@ class AccountProfile(BaseModel):
     """Account profile for a user on a provider.
 
     Attributes:
-        provider: Service provider (e.g., "spotify", "youtube").
-        account_id: Provider-specific account ID.
-        display_name: Human-readable display name.
-        email: Optional email address.
-        username: Optional username.
-        profile_url: Optional URL to the user's profile.
+        profile_name: Unique name for this profile.
+        service: Service provider (e.g., "spotify", "youtube").
+        provider_user_id: Provider-specific user ID (optional).
+        display_name: Human-readable display name (optional).
+        created_at: When the profile was created.
+        updated_at: When the profile was last updated.
     """
 
     model_config = {"extra": "forbid"}
 
-    provider: str = Field(description="Service provider")
-    account_id: str = Field(description="Provider-specific account ID")
-    display_name: str = Field(description="Human-readable display name")
-    email: Optional[str] = Field(default=None, description="Optional email address")
-    username: Optional[str] = Field(default=None, description="Optional username")
-    profile_url: Optional[str] = Field(default=None, description="Optional URL to profile")
+    profile_name: str = Field(description="Unique name for this profile")
+    service: str = Field(description="Service provider (e.g., spotify, youtube)")
+    provider_user_id: Optional[str] = Field(
+        default=None,
+        description="Provider-specific user ID"
+    )
+    display_name: Optional[str] = Field(
+        default=None,
+        description="Human-readable display name"
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.now,
+        description="When the profile was created"
+    )
+    updated_at: datetime = Field(
+        default_factory=datetime.now,
+        description="When the profile was last updated"
+    )
 
-    @field_validator("provider")
+    @field_validator("profile_name")
     @classmethod
-    def validate_provider(cls, v: str) -> str:
-        """Validate that provider is not empty."""
+    def validate_profile_name(cls, v: str) -> str:
+        """Validate that profile_name is not empty."""
         if not v or not v.strip():
-            raise ValueError("provider cannot be empty")
+            raise ValueError("profile_name cannot be empty")
         return v
 
-    @field_validator("account_id")
+    @field_validator("service")
     @classmethod
-    def validate_account_id(cls, v: str) -> str:
-        """Validate that account_id is not empty."""
+    def validate_service(cls, v: str) -> str:
+        """Validate that service is not empty."""
         if not v or not v.strip():
-            raise ValueError("account_id cannot be empty")
+            raise ValueError("service cannot be empty")
         return v
 
-    @field_validator("display_name")
-    @classmethod
-    def validate_display_name(cls, v: str) -> str:
-        """Validate that display_name is not empty."""
-        if not v or not v.strip():
-            raise ValueError("display_name cannot be empty")
-        return v
+    def model_dump(self, **kwargs) -> dict:
+        """Override model_dump to ensure consistent serialization without credential fields."""
+        return super().model_dump(**kwargs)
 
 
 class PlaylistReference(BaseModel):

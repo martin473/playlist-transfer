@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from playlist_bridge.domain.models import MatchDecision, MatchScore, NormalizedTrackHint, SpotifyCandidate, SourcePlaylistMetadata
+from playlist_bridge.domain.models import AccountProfile, MatchDecision, MatchScore, NormalizedTrackHint, SpotifyCandidate, SourcePlaylistMetadata
 
 
 
@@ -2098,3 +2098,95 @@ class TestPolicyThresholds:
         import pytest
         with pytest.raises(ValidationError):
             PolicyThresholds(auto_accept_score=0.70, minimum_runner_up_gap=0.10, review_floor=0.80)
+
+
+class TestAccountProfile:
+    """Tests for the AccountProfile model."""
+
+    def test_create_valid_profile(self) -> None:
+        """Test creating a valid AccountProfile."""
+        profile = AccountProfile(
+            profile_name="my-spotify",
+            service="spotify",
+            provider_user_id="spotify-user-123",
+            display_name="My Spotify Account",
+        )
+
+        assert profile.profile_name == "my-spotify"
+        assert profile.service == "spotify"
+        assert profile.provider_user_id == "spotify-user-123"
+        assert profile.display_name == "My Spotify Account"
+        assert profile.created_at is not None
+        assert profile.updated_at is not None
+
+    def test_create_profile_with_minimal_fields(self) -> None:
+        """Test creating an AccountProfile with only required fields."""
+        profile = AccountProfile(
+            profile_name="test-profile",
+            service="youtube",
+        )
+
+        assert profile.profile_name == "test-profile"
+        assert profile.service == "youtube"
+        assert profile.provider_user_id is None
+        assert profile.display_name is None
+        assert profile.created_at is not None
+        assert profile.updated_at is not None
+
+    def test_profile_rejects_empty_profile_name(self) -> None:
+        """Test that an empty profile_name is rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            AccountProfile(
+                profile_name="",
+                service="spotify",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("profile_name cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_profile_rejects_whitespace_profile_name(self) -> None:
+        """Test that whitespace-only profile_name is rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            AccountProfile(
+                profile_name="   ",
+                service="spotify",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("profile_name cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_profile_rejects_empty_service(self) -> None:
+        """Test that an empty service is rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            AccountProfile(
+                profile_name="my-profile",
+                service="",
+            )
+
+        errors = exc_info.value.errors()
+        assert any("service cannot be empty" in err.get("msg", "") for err in errors)
+
+    def test_profile_serializes_without_credential_fields(self) -> None:
+        """Test that AccountProfile serializes without credential fields."""
+        profile = AccountProfile(
+            profile_name="my-profile",
+            service="spotify",
+            provider_user_id="user-123",
+            display_name="My Account",
+        )
+
+        data = profile.model_dump()
+
+        # Check that credential fields are not present
+        assert "access_token" not in data
+        assert "refresh_token" not in data
+        assert "token" not in data
+        assert "credentials" not in data
+
+        # Check that expected fields are present
+        assert data["profile_name"] == "my-profile"
+        assert data["service"] == "spotify"
+        assert data["provider_user_id"] == "user-123"
+        assert data["display_name"] == "My Account"
+        assert "created_at" in data
+        assert "updated_at" in data
