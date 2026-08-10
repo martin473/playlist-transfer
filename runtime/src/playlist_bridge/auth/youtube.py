@@ -8,9 +8,9 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-from playlist_bridge.ports import CredentialCorruptionError
+from playlist_bridge.ports import AccountProfileRepository, CredentialCorruptionError, CredentialStore, KeyringError
 from playlist_bridge.settings import GoogleOAuthSettings
-from playlist_bridge.domain.enums import SourceService
+from playlist_bridge.domain.enums import DestinationService, SourceService
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
     InvalidProviderResponse,
@@ -683,3 +683,57 @@ def authenticate_youtube_profile(
                 operation="authenticate",
                 safe_message=f"Authentication failed: {type(e).__name__}",
             ) from e
+
+
+def logout_youtube_profile(
+    profile_name: str,
+    profiles: AccountProfileRepository,
+    credentials: CredentialStore,
+) -> AccountProfile:
+    """Log out of a YouTube profile by deleting its stored credentials.
+
+    This function deletes the YouTube OAuth token for the given profile from
+    the credential store while preserving the profile metadata in the repository.
+    The profile is returned with its state effectively becoming "missing" since
+    the credentials are removed.
+
+    Args:
+        profile_name: The name of the YouTube profile to log out.
+        profiles: Repository for accessing account profile information.
+        credentials: Credential store for OAuth token deletion.
+
+    Returns:
+        AccountProfile: The account profile for the logged-out user.
+
+    Raises:
+        ValueError: If profile_name is empty or None, or if profile not found.
+        CredentialCorruptionError: If the credential store encounters malformed data.
+        KeyringError: If the keyring backend fails.
+
+    Side Effects:
+        - os_keychain_delete: Deletes the YouTube OAuth token from the system keychain.
+        - sqlite_read: Reads the profile metadata from the database.
+    """
+    if not profile_name or not profile_name.strip():
+        raise ValueError("profile_name must not be empty")
+    if profiles is None:
+        raise ValueError("profiles repository must not be None")
+    if credentials is None:
+        raise ValueError("credentials store must not be None")
+
+    # Retrieve the profile metadata first (will raise ValueError if not found)
+    profile = profiles.get(SourceService.YOUTUBE, profile_name)
+    if profile is None:
+        raise ValueError(f"Profile '{profile_name}' not found for YouTube")
+
+    # Delete the stored credentials from the keyring
+    try:
+        credentials.delete(SourceService.YOUTUBE, profile_name)
+    except Exception as e:
+        # Re-raise CredentialCorruptionError or KeyringError as-is
+        if isinstance(e, (CredentialCorruptionError, KeyringError)):
+            raise
+        raise KeyringError(f"Failed to delete YouTube credentials for '{profile_name}': {e}") from e
+
+    # Return the profile (the credentials are now deleted, making the state "missing")
+    return profile

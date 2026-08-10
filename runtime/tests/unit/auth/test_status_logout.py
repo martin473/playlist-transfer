@@ -1744,3 +1744,43 @@ class TestLogoutSpotifyProfile:
         assert result.display_name == "My Spotify Account"
         # The credentials were deleted, making the auth state effectively "missing"
         mock_credentials.delete.assert_called_once_with(DestinationService.SPOTIFY, "my-spotify")
+
+
+class TestLogoutYouTubeProfile:
+    """Tests for logout_youtube_profile function."""
+
+    def test_logout_youtube_profile_returns_profile_without_credentials(self) -> None:
+        """Test that the returned profile has metadata preserved but credentials are deleted."""
+        from playlist_bridge.auth.youtube import logout_youtube_profile
+        from playlist_bridge.domain.enums import DestinationService, SourceService
+        from playlist_bridge.domain.models import AccountProfile
+        from unittest.mock import MagicMock
+
+        # Setup
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        # Create a profile with specific metadata
+        profile = AccountProfile(
+            profile_name="my-youtube",
+            service="youtube",
+            provider_user_id="youtube-user-789",
+            display_name="My YouTube Account",
+        )
+        mock_profiles.get.return_value = profile
+        mock_credentials.delete.return_value = True
+
+        # Execute
+        result = logout_youtube_profile(
+            profile_name="my-youtube",
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        # Verify the profile metadata is preserved (credentials are now missing)
+        assert result.profile_name == "my-youtube"
+        assert result.service == "youtube"
+        assert result.provider_user_id == "youtube-user-789"
+        assert result.display_name == "My YouTube Account"
+        # The credentials were deleted, making the auth state effectively "missing"
+        mock_credentials.delete.assert_called_once_with(SourceService.YOUTUBE, "my-youtube")
