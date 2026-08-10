@@ -39,23 +39,57 @@
     "alternatives": [
       {
         "source_item_id": "video_ambiguous_001",
-        "destination_uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
-        "destination_track_id": "6rqhFgbbKwnb9MLmUQDhG6",
-        "destination_title": "Bohemian Rhapsody",
-        "destination_artist_names": ["Queen"],
-        "score": 0.85,
-        "decision_type": "accepted",
-        "confidence": 0.9
+        "status": "matched",
+        "selected_candidate": {
+          "track_id": "6rqhFgbbKwnb9MLmUQDhG6",
+          "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+          "title": "Bohemian Rhapsody",
+          "artist_names": ["Queen"],
+          "album": "A Night at the Opera",
+          "duration_seconds": 354,
+          "explicit": false,
+          "isrc": "GBUM71029604",
+          "market_availability": ["US", "GB", "DE"]
+        },
+        "ranked_alternatives": [],
+        "score": {
+          "title_similarity": 0.95,
+          "artist_similarity": 1.0,
+          "duration_similarity": 0.95,
+          "version_agreement": 0.7,
+          "unwanted_version_penalty": 0.0,
+          "explicit_state": 1.0,
+          "total_score": 0.85,
+          "reasons": ["Title match", "Artist match", "Duration match"]
+        },
+        "reason": "High confidence match"
       },
       {
         "source_item_id": "video_ambiguous_001",
-        "destination_uri": "spotify:track:7yRq6c1J8vL3Z6xS3KxgYk",
-        "destination_track_id": "7yRq6c1J8vL3Z6xS3KxgYk",
-        "destination_title": "Bohemian Rhapsody (Live)",
-        "destination_artist_names": ["Queen"],
-        "score": 0.45,
-        "decision_type": "review",
-        "confidence": 0.6
+        "status": "matched",
+        "selected_candidate": {
+          "track_id": "7yRq6c1J8vL3Z6xS3KxgYk",
+          "uri": "spotify:track:7yRq6c1J8vL3Z6xS3KxgYk",
+          "title": "Bohemian Rhapsody (Live)",
+          "artist_names": ["Queen"],
+          "album": "Live Killers",
+          "duration_seconds": 390,
+          "explicit": false,
+          "isrc": "GBUM71029605",
+          "market_availability": ["US", "GB"]
+        },
+        "ranked_alternatives": [],
+        "score": {
+          "title_similarity": 0.5,
+          "artist_similarity": 1.0,
+          "duration_similarity": 0.4,
+          "version_agreement": 0.3,
+          "unwanted_version_penalty": 0.0,
+          "explicit_state": 1.0,
+          "total_score": 0.45,
+          "reasons": ["Title mismatch", "Artist match", "Duration mismatch"]
+        },
+        "reason": "Low confidence match - review required"
       }
     ]
   }

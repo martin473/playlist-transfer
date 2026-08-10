@@ -117,23 +117,27 @@ class TestDomainFixtures:
 
         decision1 = MatchDecision(**alternatives[0])
         assert decision1.source_item_id == "video_ambiguous_001"
-        assert decision1.destination_uri == "spotify:track:6rqhFgbbKwnb9MLmUQDhG6"
-        assert decision1.destination_track_id == "6rqhFgbbKwnb9MLmUQDhG6"
-        assert decision1.destination_title == "Bohemian Rhapsody"
-        assert decision1.destination_artist_names == ["Queen"]
-        assert decision1.score == 0.85
-        assert decision1.decision_type == "accepted"
-        assert decision1.confidence == 0.9
+        assert decision1.status == "matched"
+        assert decision1.selected_candidate is not None
+        assert decision1.selected_candidate.track_id == "6rqhFgbbKwnb9MLmUQDhG6"
+        assert decision1.selected_candidate.uri == "spotify:track:6rqhFgbbKwnb9MLmUQDhG6"
+        assert decision1.selected_candidate.title == "Bohemian Rhapsody"
+        assert decision1.selected_candidate.artist_names == ["Queen"]
+        assert decision1.score is not None
+        assert decision1.score.total_score == 0.85
+        assert decision1.reason == "High confidence match"
 
         decision2 = MatchDecision(**alternatives[1])
         assert decision2.source_item_id == "video_ambiguous_001"
-        assert decision2.destination_uri == "spotify:track:7yRq6c1J8vL3Z6xS3KxgYk"
-        assert decision2.destination_track_id == "7yRq6c1J8vL3Z6xS3KxgYk"
-        assert decision2.destination_title == "Bohemian Rhapsody (Live)"
-        assert decision2.destination_artist_names == ["Queen"]
-        assert decision2.score == 0.45
-        assert decision2.decision_type == "review"
-        assert decision2.confidence == 0.6
+        assert decision2.status == "matched"
+        assert decision2.selected_candidate is not None
+        assert decision2.selected_candidate.track_id == "7yRq6c1J8vL3Z6xS3KxgYk"
+        assert decision2.selected_candidate.uri == "spotify:track:7yRq6c1J8vL3Z6xS3KxgYk"
+        assert decision2.selected_candidate.title == "Bohemian Rhapsody (Live)"
+        assert decision2.selected_candidate.artist_names == ["Queen"]
+        assert decision2.score is not None
+        assert decision2.score.total_score == 0.45
+        assert decision2.reason == "Low confidence match - review required"
 
         # Test that the hint serializes correctly
         serialized = hint.model_dump()
