@@ -2102,6 +2102,7 @@ class TestRecordJobError:
             source_service=SourceService.YOUTUBE,
             destination_service=DestinationService.SPOTIFY,
             transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
         )
         create_job(in_memory_session, request, job_id, created_at)
 
@@ -2121,7 +2122,8 @@ class TestRecordJobError:
         # Verify the job was updated
         assert result.id == job_id
         assert result.last_error == "[SPOTIFY_404] Playlist not found"
-        assert result.updated_at == updated_at
+        # SQLite does not store timezone info, so compare normalized UTC values
+        assert result.updated_at.replace(tzinfo=timezone.utc) == updated_at
 
         # Reload the job and verify the error persists
         reloaded = get_job(in_memory_session, job_id)
@@ -2154,6 +2156,7 @@ class TestRecordJobError:
             source_service=SourceService.YOUTUBE,
             destination_service=DestinationService.SPOTIFY,
             transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
         )
         create_job(in_memory_session, request, job_id, created_at)
         updated_at = datetime.now(timezone.utc)
@@ -2178,6 +2181,7 @@ class TestRecordJobError:
             source_service=SourceService.YOUTUBE,
             destination_service=DestinationService.SPOTIFY,
             transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
         )
         create_job(in_memory_session, request, job_id, created_at)
         updated_at = datetime.now(timezone.utc)
@@ -2202,6 +2206,7 @@ class TestRecordJobError:
             source_service=SourceService.YOUTUBE,
             destination_service=DestinationService.SPOTIFY,
             transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
         )
         create_job(in_memory_session, request, job_id, created_at)
         updated_at = datetime.now(timezone.utc)
@@ -2229,6 +2234,7 @@ class TestRecordJobError:
             source_service=SourceService.YOUTUBE,
             destination_service=DestinationService.SPOTIFY,
             transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
         )
         create_job(in_memory_session, request, job_id, created_at)
         updated_at = datetime.now(timezone.utc)
@@ -2256,6 +2262,7 @@ class TestRecordJobError:
             source_service=SourceService.YOUTUBE,
             destination_service=DestinationService.SPOTIFY,
             transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
         )
         create_job(in_memory_session, request, job_id, created_at)
 
@@ -2280,7 +2287,8 @@ class TestRecordJobError:
         )
 
         assert result.last_error == "[SPOTIFY_RATE_LIMIT] Rate limit exceeded"
-        assert result.updated_at == updated_at2
+        # SQLite does not store timezone info, so compare normalized UTC values
+        assert result.updated_at.replace(tzinfo=timezone.utc) == updated_at2
 
         # Reload and verify only the latest error is stored
         reloaded = get_job(in_memory_session, job_id)
