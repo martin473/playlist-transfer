@@ -521,6 +521,26 @@ def upsert_match_decision(
     if job_exists is None:
         raise JobNotFoundError(job_id)
 
+    # Map domain status to persistence status
+    status_mapping = {
+        "matched": "accepted",
+        "unmatched": "rejected",
+    }
+    decision_status = status_mapping.get(decision.status, "pending")
+
+    # Extract spotify_track_id from selected_candidate if status is "matched"
+    spotify_track_id = None
+    if decision.status == "matched" and decision.selected_candidate:
+        spotify_track_id = decision.selected_candidate.track_id
+
+    # Serialize score to dict
+    score_json = {}
+    if decision.score:
+        score_json = decision.score.model_dump()
+    # Add reason to score_json
+    if decision.reason:
+        score_json["reason"] = decision.reason
+
     # Check if a decision already exists for this job and source item
     existing = session.query(MatchDecisionRecord).filter_by(
         job_id=job_id,
@@ -529,30 +549,19 @@ def upsert_match_decision(
 
     if existing:
         # Update the existing record
-        existing.spotify_track_id = decision.destination_track_id
-        existing.score_json = {
-            "score": decision.score,
-            "confidence": decision.confidence,
-            "decision_type": decision.decision_type,
-        }
-        existing.decision_status = decision.decision_type
-        # reviewed field is not in MatchDecision domain model; keep existing value
-        # updated_at will be updated automatically via onupdate
+        existing.spotify_track_id = spotify_track_id
+        existing.score_json = score_json
+        existing.decision_status = decision_status
+        # reviewed field: keep existing value
         session.commit()
-        # Return the updated decision (using the same domain object)
-        return decision
     else:
         # Create a new record
         record = MatchDecisionRecord(
             job_id=job_id,
             source_item_id=decision.source_item_id,
-            spotify_track_id=decision.destination_track_id,
-            score_json={
-                "score": decision.score,
-                "confidence": decision.confidence,
-                "decision_type": decision.decision_type,
-            },
-            decision_status=decision.decision_type,
+            spotify_track_id=spotify_track_id,
+            score_json=score_json,
+            decision_status=decision_status,
             reviewed=False,
         )
         try:
@@ -562,7 +571,7 @@ def upsert_match_decision(
             session.rollback()
             raise IntegrityError(f"Integrity constraint violated: {e}") from e
 
-        return decision
+    return decision
 
 
 def get_unresolved_decisions(session: Session, job_id: str) -> list[MatchDecision]:
@@ -591,7 +600,6 @@ def get_unresolved_decisions(session: Session, job_id: str) -> list[MatchDecisio
         raise JobNotFoundError(job_id)
 
     # Query unresolved decisions with source track join for ordering
-    # Use a join to SourceTrackRecord to get the position for ordering
     from sqlalchemy import asc
 
     records = (
@@ -607,23 +615,58 @@ def get_unresolved_decisions(session: Session, job_id: str) -> list[MatchDecisio
         .all()
     )
 
-    # Convert ORM records to domain MatchDecision objects
+    # Convert ORM records to domain MatchDecision objects using the new domain model
+    from playlist_bridge.domain.models import MatchScore, SpotifyCandidate
+
     decisions = []
     for record in records:
         score_data = record.score_json
-        # Use the spotify_track_id to construct the URI
-        track_id = record.spotify_track_id or "unknown"
-        # Ensure we have valid values for all required fields
-        destination_uri = f"spotify:track:{track_id}" if record.spotify_track_id else "spotify:track:unknown"
+        track_id = record.spotify_track_id
+
+        # Build SpotifyCandidate if we have a track_id
+        selected_candidate = None
+        if track_id:
+            selected_candidate = SpotifyCandidate(
+                track_id=track_id,
+                uri=f"spotify:track:{track_id}",
+                title=score_data.get("destination_title", track_id),
+                artist_names=score_data.get("destination_artist_names", ["Unknown Artist"]),
+                album=score_data.get("album", "Unknown Album"),
+                duration_seconds=score_data.get("duration_seconds", 0),
+                explicit=score_data.get("explicit", False),
+            )
+
+        # Build MatchScore from score_data
+        match_score = None
+        if score_data:
+            match_score = MatchScore(
+                title_similarity=score_data.get("title_similarity", 0.0),
+                artist_similarity=score_data.get("artist_similarity", 0.0),
+                duration_similarity=score_data.get("duration_similarity", 0.0),
+                version_agreement=score_data.get("version_agreement", 1.0),
+                unwanted_version_penalty=score_data.get("unwanted_version_penalty", 1.0),
+                explicit_state=score_data.get("explicit_state", 1.0),
+                total_score=score_data.get("total_score", 0.0),
+                reasons=score_data.get("reasons", []),
+            )
+
+        # Map persistence status to domain status
+        status_mapping = {
+            "accepted": "matched",
+            "rejected": "unmatched",
+            "pending": "matched",
+            "review": "matched",
+        }
+        status = status_mapping.get(record.decision_status, "matched")
+
+        reason = score_data.get("reason", f"Decision: {record.decision_status}")
+
         decision = MatchDecision(
             source_item_id=record.source_item_id,
-            destination_uri=destination_uri,
-            destination_track_id=track_id,
-            destination_title=track_id if track_id != "unknown" else "Unknown Track",
-            destination_artist_names=["Unknown Artist"],
-            score=score_data.get("score", 0.0),
-            decision_type=record.decision_status,
-            confidence=score_data.get("confidence", 0.0),
+            status=status,
+            selected_candidate=selected_candidate,
+            score=match_score,
+            reason=reason,
         )
         decisions.append(decision)
 

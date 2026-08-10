@@ -927,16 +927,36 @@ class TestUpsertMatchDecision:
         created_at = datetime.now(timezone.utc)
         create_job(session=in_memory_session, request=request, job_id=job_id, created_at=created_at)
 
+        # Create a Spotify candidate
+        candidate = SpotifyCandidate(
+            track_id="abc123",
+            uri="spotify:track:abc123",
+            title="Test Track",
+            artist_names=["Test Artist"],
+            album="Test Album",
+            duration_seconds=180,
+            explicit=False,
+        )
+
+        # Create a match score
+        score = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=0.85,
+            version_agreement=1.0,
+            unwanted_version_penalty=1.0,
+            explicit_state=1.0,
+            total_score=0.94,
+            reasons=["Good match"],
+        )
+
         # Create a match decision
         decision = MatchDecision(
             source_item_id="video_1",
-            destination_uri="spotify:track:abc123",
-            destination_track_id="abc123",
-            destination_title="Test Track",
-            destination_artist_names=["Test Artist"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate,
+            score=score,
+            reason="Good match",
         )
 
         # Upsert the decision
@@ -948,10 +968,11 @@ class TestUpsertMatchDecision:
 
         # Verify the result
         assert result.source_item_id == "video_1"
-        assert result.destination_track_id == "abc123"
-        assert result.score == 0.95
-        assert result.decision_type == "accepted"
-        assert result.confidence == 0.9
+        assert result.status == "matched"
+        assert result.selected_candidate is not None
+        assert result.selected_candidate.track_id == "abc123"
+        assert result.score is not None
+        assert result.score.total_score == 0.94
 
         # Verify it was persisted
         from playlist_bridge.persistence.models import MatchDecisionRecord
@@ -962,11 +983,14 @@ class TestUpsertMatchDecision:
         assert record is not None
         assert record.spotify_track_id == "abc123"
         assert record.decision_status == "accepted"
-        assert record.score_json["score"] == 0.95
-        assert record.score_json["confidence"] == 0.9
+        assert record.score_json["total_score"] == 0.94
+        assert record.score_json["reason"] == "Good match"
 
     def test_upsert_match_decision_replaces_existing(self, in_memory_session: Session):
-        """A second write replaces the first decision for the same job and source item."""
+        """A second write replaces the first decision for the same job and source item.
+
+        This is the acceptance criterion: a second write replaces the first decision.
+        """
         # Create a job first
         request = TransferRequest(
             source_service="youtube",
@@ -979,16 +1003,34 @@ class TestUpsertMatchDecision:
         created_at = datetime.now(timezone.utc)
         create_job(session=in_memory_session, request=request, job_id=job_id, created_at=created_at)
 
+        # Create first candidate and score
+        candidate1 = SpotifyCandidate(
+            track_id="first123",
+            uri="spotify:track:first123",
+            title="First Track",
+            artist_names=["First Artist"],
+            album="First Album",
+            duration_seconds=180,
+            explicit=False,
+        )
+        score1 = MatchScore(
+            title_similarity=0.5,
+            artist_similarity=0.4,
+            duration_similarity=0.5,
+            version_agreement=0.5,
+            unwanted_version_penalty=1.0,
+            explicit_state=1.0,
+            total_score=0.48,
+            reasons=["Low similarity"],
+        )
+
         # Create first decision
         decision1 = MatchDecision(
             source_item_id="video_1",
-            destination_uri="spotify:track:first123",
-            destination_track_id="first123",
-            destination_title="First Track",
-            destination_artist_names=["First Artist"],
-            score=0.5,
-            decision_type="review",
-            confidence=0.6,
+            status="matched",
+            selected_candidate=candidate1,
+            score=score1,
+            reason="First decision - low confidence",
         )
 
         # Upsert first decision
@@ -998,16 +1040,34 @@ class TestUpsertMatchDecision:
             decision=decision1,
         )
 
-        # Create second decision (different values, same source_item_id)
+        # Create second candidate and score (different values, same source_item_id)
+        candidate2 = SpotifyCandidate(
+            track_id="second456",
+            uri="spotify:track:second456",
+            title="Second Track",
+            artist_names=["Second Artist"],
+            album="Second Album",
+            duration_seconds=185,
+            explicit=True,
+        )
+        score2 = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=0.85,
+            version_agreement=1.0,
+            unwanted_version_penalty=1.0,
+            explicit_state=1.0,
+            total_score=0.94,
+            reasons=["Great match"],
+        )
+
+        # Create second decision
         decision2 = MatchDecision(
             source_item_id="video_1",
-            destination_uri="spotify:track:second456",
-            destination_track_id="second456",
-            destination_title="Second Track",
-            destination_artist_names=["Second Artist"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate2,
+            score=score2,
+            reason="Second decision - high confidence",
         )
 
         # Upsert second decision
@@ -1019,11 +1079,12 @@ class TestUpsertMatchDecision:
 
         # Verify the result has the second values
         assert result2.source_item_id == "video_1"
-        assert result2.destination_track_id == "second456"
-        assert result2.destination_title == "Second Track"
-        assert result2.score == 0.95
-        assert result2.decision_type == "accepted"
-        assert result2.confidence == 0.9
+        assert result2.status == "matched"
+        assert result2.selected_candidate is not None
+        assert result2.selected_candidate.track_id == "second456"
+        assert result2.selected_candidate.title == "Second Track"
+        assert result2.score is not None
+        assert result2.score.total_score == 0.94
 
         # Verify the database only has one record (the second one)
         from playlist_bridge.persistence.models import MatchDecisionRecord
@@ -1034,22 +1095,39 @@ class TestUpsertMatchDecision:
         assert len(records) == 1
         assert records[0].spotify_track_id == "second456"
         assert records[0].decision_status == "accepted"
-        assert records[0].score_json["score"] == 0.95
-        assert records[0].score_json["confidence"] == 0.9
+        assert records[0].score_json["total_score"] == 0.94
+        assert records[0].score_json["reason"] == "Second decision - high confidence"
 
     def test_upsert_match_decision_job_not_found(self, in_memory_session: Session):
         """Upserting a decision for a non-existent job should raise JobNotFoundError."""
         non_existent_job_id = "non-existent-job-id"
 
+        candidate = SpotifyCandidate(
+            track_id="abc123",
+            uri="spotify:track:abc123",
+            title="Test Track",
+            artist_names=["Test Artist"],
+            album="Test Album",
+            duration_seconds=180,
+            explicit=False,
+        )
+        score = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=0.85,
+            version_agreement=1.0,
+            unwanted_version_penalty=1.0,
+            explicit_state=1.0,
+            total_score=0.94,
+            reasons=["Good match"],
+        )
+
         decision = MatchDecision(
             source_item_id="video_1",
-            destination_uri="spotify:track:abc123",
-            destination_track_id="abc123",
-            destination_title="Test Track",
-            destination_artist_names=["Test Artist"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate,
+            score=score,
+            reason="Good match",
         )
 
         with pytest.raises(JobNotFoundError) as exc_info:
@@ -1780,56 +1858,75 @@ class TestGetUnresolvedDecisions:
         # video4: review (included)
         # video5: unmatched (included)
 
+        # Helper to create SpotifyCandidate
+        def make_candidate(track_id, title, artists):
+            return SpotifyCandidate(
+                track_id=track_id,
+                uri=f"spotify:track:{track_id}",
+                title=title,
+                artist_names=artists,
+                album="Test Album",
+                duration_seconds=180,
+                explicit=False,
+            )
+
+        # Helper to create MatchScore
+        def make_score(total_score):
+            return MatchScore(
+                title_similarity=total_score,
+                artist_similarity=total_score,
+                duration_similarity=total_score,
+                version_agreement=1.0,
+                unwanted_version_penalty=1.0,
+                explicit_state=1.0,
+                total_score=total_score,
+                reasons=["Test"],
+            )
+
+        # Map decision_type to status
+        status_map = {
+            "accepted": "matched",
+            "skipped": "unmatched",
+            "pending": "matched",
+            "review": "matched",
+            "unmatched": "unmatched",
+        }
+
         decisions = [
             MatchDecision(
                 source_item_id="video1",
-                destination_uri="spotify:track:track1",
-                destination_track_id="track1",
-                destination_title="Track 1",
-                destination_artist_names=["Artist 1"],
-                score=0.95,
-                decision_type="accepted",
-                confidence=0.9,
+                status=status_map["accepted"],
+                selected_candidate=make_candidate("track1", "Track 1", ["Artist 1"]),
+                score=make_score(0.95),
+                reason="Accepted",
             ),
             MatchDecision(
                 source_item_id="video2",
-                destination_uri="spotify:track:track2",
-                destination_track_id="track2",
-                destination_title="Track 2",
-                destination_artist_names=["Artist 2"],
-                score=0.0,
-                decision_type="skipped",
-                confidence=0.0,
+                status=status_map["skipped"],
+                selected_candidate=make_candidate("track2", "Track 2", ["Artist 2"]),
+                score=make_score(0.0),
+                reason="Skipped",
             ),
             MatchDecision(
                 source_item_id="video3",
-                destination_uri="spotify:track:track3",
-                destination_track_id="track3",
-                destination_title="Track 3",
-                destination_artist_names=["Artist 3"],
-                score=0.0,
-                decision_type="pending",
-                confidence=0.0,
+                status=status_map["pending"],
+                selected_candidate=make_candidate("track3", "Track 3", ["Artist 3"]),
+                score=make_score(0.0),
+                reason="Pending",
             ),
             MatchDecision(
                 source_item_id="video4",
-                destination_uri="spotify:track:track4",
-                destination_track_id="track4",
-                destination_title="Track 4",
-                destination_artist_names=["Artist 4"],
-                score=0.75,
-                decision_type="review",
-                confidence=0.7,
+                status=status_map["review"],
+                selected_candidate=make_candidate("track4", "Track 4", ["Artist 4"]),
+                score=make_score(0.75),
+                reason="Review",
             ),
             MatchDecision(
                 source_item_id="video5",
-                destination_uri="spotify:track:unmatched",
-                destination_track_id="unmatched",
-                destination_title="No Match Found",
-                destination_artist_names=["Unknown"],
-                score=0.0,
-                decision_type="unmatched",
-                confidence=0.0,
+                status=status_map["unmatched"],
+                selected_candidate=make_candidate("unmatched", "No Match Found", ["Unknown"]),
+                score=make_score(0.0),
+                reason="Unmatched",
             ),
         ]
 
