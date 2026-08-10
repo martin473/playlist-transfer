@@ -2,7 +2,12 @@
 
 import pytest
 
-from playlist_bridge.domain.models import SourceTrack, MatchDecision
+from playlist_bridge.domain.models import (
+    SourceTrack,
+    MatchDecision,
+    MatchScore,
+    SpotifyCandidate,
+)
 from playlist_bridge.jobs.runner import accepted_uris_in_source_order
 
 
@@ -37,36 +42,67 @@ class TestAcceptedUrisInSourceOrder:
             availability="available",
         )
 
+        # Create candidates
+        candidate1 = SpotifyCandidate(
+            track_id="uri1",
+            uri="spotify:track:uri1",
+            title="Song A",
+            artist_names=["Artist A"],
+            album="Album A",
+            duration_seconds=180,
+            explicit=False,
+        )
+        candidate3 = SpotifyCandidate(
+            track_id="uri3",
+            uri="spotify:track:uri3",
+            title="Song C",
+            artist_names=["Artist C"],
+            album="Album C",
+            duration_seconds=190,
+            explicit=False,
+        )
+
+        # Create scores
+        score1 = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=1.0,
+            version_agreement=1.0,
+            unwanted_version_penalty=0.0,
+            explicit_state=1.0,
+            total_score=0.95,
+            reasons=["Good match"],
+        )
+        score3 = MatchScore(
+            title_similarity=0.85,
+            artist_similarity=0.8,
+            duration_similarity=1.0,
+            version_agreement=1.0,
+            unwanted_version_penalty=0.0,
+            explicit_state=1.0,
+            total_score=0.85,
+            reasons=["Good match"],
+        )
+
         # Create decisions - only track1 and track3 are accepted
         decision1 = MatchDecision(
             source_item_id="vid1",
-            destination_uri="spotify:track:uri1",
-            destination_track_id="uri1",
-            destination_title="Song A",
-            destination_artist_names=["Artist A"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate1,
+            score=score1,
+            reason="Good match",
         )
         decision2 = MatchDecision(
             source_item_id="vid2",
-            destination_uri="spotify:track:uri2",
-            destination_track_id="uri2",
-            destination_title="Song B",
-            destination_artist_names=["Artist B"],
-            score=0.3,
-            decision_type="unmatched",
-            confidence=0.2,
+            status="unmatched",
+            reason="No suitable match",
         )
         decision3 = MatchDecision(
             source_item_id="vid3",
-            destination_uri="spotify:track:uri3",
-            destination_track_id="uri3",
-            destination_title="Song C",
-            destination_artist_names=["Artist C"],
-            score=0.85,
-            decision_type="accepted",
-            confidence=0.8,
+            status="matched",
+            selected_candidate=candidate3,
+            score=score3,
+            reason="Good match",
         )
 
         tracks = [track1, track2, track3]
@@ -97,25 +133,59 @@ class TestAcceptedUrisInSourceOrder:
             availability="available",
         )
 
+        candidate1 = SpotifyCandidate(
+            track_id="uri1",
+            uri="spotify:track:uri1",
+            title="Song A",
+            artist_names=["Artist A"],
+            album="Album A",
+            duration_seconds=180,
+            explicit=False,
+        )
+        candidate2 = SpotifyCandidate(
+            track_id="uri2",
+            uri="spotify:track:uri2",
+            title="Song B",
+            artist_names=["Artist B"],
+            album="Album B",
+            duration_seconds=200,
+            explicit=False,
+        )
+
+        score1 = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=1.0,
+            version_agreement=1.0,
+            unwanted_version_penalty=0.0,
+            explicit_state=1.0,
+            total_score=0.95,
+            reasons=["Good match"],
+        )
+        score2 = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=1.0,
+            version_agreement=1.0,
+            unwanted_version_penalty=0.0,
+            explicit_state=1.0,
+            total_score=0.95,
+            reasons=["Good match"],
+        )
+
         decision1 = MatchDecision(
             source_item_id="vid1",
-            destination_uri="spotify:track:uri1",
-            destination_track_id="uri1",
-            destination_title="Song A",
-            destination_artist_names=["Artist A"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate1,
+            score=score1,
+            reason="Good match",
         )
         decision2 = MatchDecision(
             source_item_id="vid2",
-            destination_uri="spotify:track:uri2",
-            destination_track_id="uri2",
-            destination_title="Song B",
-            destination_artist_names=["Artist B"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate2,
+            score=score2,
+            reason="Good match",
         )
 
         tracks = [track1, track2]
@@ -146,25 +216,38 @@ class TestAcceptedUrisInSourceOrder:
             availability="available",
         )
 
+        # Track1 is skipped (not matched)
         decision1 = MatchDecision(
             source_item_id="vid1",
-            destination_uri="spotify:track:uri1",
-            destination_track_id="uri1",
-            destination_title="Song A",
-            destination_artist_names=["Artist A"],
-            score=0.95,
-            decision_type="skipped",
-            confidence=0.9,
+            status="unmatched",
+            reason="Skipped by user",
+        )
+
+        candidate2 = SpotifyCandidate(
+            track_id="uri2",
+            uri="spotify:track:uri2",
+            title="Song B",
+            artist_names=["Artist B"],
+            album="Album B",
+            duration_seconds=200,
+            explicit=False,
+        )
+        score2 = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=1.0,
+            version_agreement=1.0,
+            unwanted_version_penalty=0.0,
+            explicit_state=1.0,
+            total_score=0.95,
+            reasons=["Good match"],
         )
         decision2 = MatchDecision(
             source_item_id="vid2",
-            destination_uri="spotify:track:uri2",
-            destination_track_id="uri2",
-            destination_title="Song B",
-            destination_artist_names=["Artist B"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate2,
+            score=score2,
+            reason="Good match",
         )
 
         tracks = [track1, track2]
@@ -172,6 +255,7 @@ class TestAcceptedUrisInSourceOrder:
 
         result = accepted_uris_in_source_order(tracks, decisions)
 
+        # Only track2 should be included
         expected = ["spotify:track:uri2"]
         assert result == expected
 
@@ -194,25 +278,38 @@ class TestAcceptedUrisInSourceOrder:
             availability="available",
         )
 
+        # Track1 is unmatched
         decision1 = MatchDecision(
             source_item_id="vid1",
-            destination_uri="spotify:track:uri1",
-            destination_track_id="uri1",
-            destination_title="Song A",
-            destination_artist_names=["Artist A"],
-            score=0.3,
-            decision_type="unmatched",
-            confidence=0.2,
+            status="unmatched",
+            reason="No suitable match found",
+        )
+
+        candidate2 = SpotifyCandidate(
+            track_id="uri2",
+            uri="spotify:track:uri2",
+            title="Song B",
+            artist_names=["Artist B"],
+            album="Album B",
+            duration_seconds=200,
+            explicit=False,
+        )
+        score2 = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=1.0,
+            version_agreement=1.0,
+            unwanted_version_penalty=0.0,
+            explicit_state=1.0,
+            total_score=0.95,
+            reasons=["Good match"],
         )
         decision2 = MatchDecision(
             source_item_id="vid2",
-            destination_uri="spotify:track:uri2",
-            destination_track_id="uri2",
-            destination_title="Song B",
-            destination_artist_names=["Artist B"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate2,
+            score=score2,
+            reason="Good match",
         )
 
         tracks = [track1, track2]
@@ -220,6 +317,7 @@ class TestAcceptedUrisInSourceOrder:
 
         result = accepted_uris_in_source_order(tracks, decisions)
 
+        # Only track2 should be included
         expected = ["spotify:track:uri2"]
         assert result == expected
 
@@ -242,25 +340,38 @@ class TestAcceptedUrisInSourceOrder:
             availability="available",
         )
 
+        # Track1 is ambiguous (unmatched with no selected candidate)
         decision1 = MatchDecision(
             source_item_id="vid1",
-            destination_uri="spotify:track:uri1",
-            destination_track_id="uri1",
-            destination_title="Song A",
-            destination_artist_names=["Artist A"],
-            score=0.5,
-            decision_type="review",
-            confidence=0.4,
+            status="unmatched",
+            reason="Ambiguous match",
+        )
+
+        candidate2 = SpotifyCandidate(
+            track_id="uri2",
+            uri="spotify:track:uri2",
+            title="Song B",
+            artist_names=["Artist B"],
+            album="Album B",
+            duration_seconds=200,
+            explicit=False,
+        )
+        score2 = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=1.0,
+            version_agreement=1.0,
+            unwanted_version_penalty=0.0,
+            explicit_state=1.0,
+            total_score=0.95,
+            reasons=["Good match"],
         )
         decision2 = MatchDecision(
             source_item_id="vid2",
-            destination_uri="spotify:track:uri2",
-            destination_track_id="uri2",
-            destination_title="Song B",
-            destination_artist_names=["Artist B"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate2,
+            score=score2,
+            reason="Good match",
         )
 
         tracks = [track1, track2]
@@ -268,6 +379,7 @@ class TestAcceptedUrisInSourceOrder:
 
         result = accepted_uris_in_source_order(tracks, decisions)
 
+        # Only track2 should be included
         expected = ["spotify:track:uri2"]
         assert result == expected
 
@@ -290,15 +402,32 @@ class TestAcceptedUrisInSourceOrder:
             availability="available",
         )
 
+        # Only decision for track2
+        candidate2 = SpotifyCandidate(
+            track_id="uri2",
+            uri="spotify:track:uri2",
+            title="Song B",
+            artist_names=["Artist B"],
+            album="Album B",
+            duration_seconds=200,
+            explicit=False,
+        )
+        score2 = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=1.0,
+            version_agreement=1.0,
+            unwanted_version_penalty=0.0,
+            explicit_state=1.0,
+            total_score=0.95,
+            reasons=["Good match"],
+        )
         decision2 = MatchDecision(
             source_item_id="vid2",
-            destination_uri="spotify:track:uri2",
-            destination_track_id="uri2",
-            destination_title="Song B",
-            destination_artist_names=["Artist B"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate2,
+            score=score2,
+            reason="Good match",
         )
 
         tracks = [track1, track2]
@@ -306,7 +435,7 @@ class TestAcceptedUrisInSourceOrder:
 
         result = accepted_uris_in_source_order(tracks, decisions)
 
-        # Only track2 has a decision
+        # Only track2 should be included
         expected = ["spotify:track:uri2"]
         assert result == expected
 
@@ -336,15 +465,31 @@ class TestAcceptedUrisInSourceOrder:
         )
 
         # Only one decision for this video_id
+        candidate1 = SpotifyCandidate(
+            track_id="uri1",
+            uri="spotify:track:uri1",
+            title="Song A",
+            artist_names=["Artist A"],
+            album="Album A",
+            duration_seconds=180,
+            explicit=False,
+        )
+        score1 = MatchScore(
+            title_similarity=0.95,
+            artist_similarity=0.9,
+            duration_similarity=1.0,
+            version_agreement=1.0,
+            unwanted_version_penalty=0.0,
+            explicit_state=1.0,
+            total_score=0.95,
+            reasons=["Good match"],
+        )
         decision1 = MatchDecision(
             source_item_id="vid1",
-            destination_uri="spotify:track:uri1",
-            destination_track_id="uri1",
-            destination_title="Song A",
-            destination_artist_names=["Artist A"],
-            score=0.95,
-            decision_type="accepted",
-            confidence=0.9,
+            status="matched",
+            selected_candidate=candidate1,
+            score=score1,
+            reason="Good match",
         )
 
         tracks = [track1, track2]

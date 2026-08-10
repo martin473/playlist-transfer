@@ -5,7 +5,7 @@ import uuid
 from typing import NamedTuple, Sequence, TextIO, Union
 
 from playlist_bridge.domain.events import JobEvent, JobEventAdapter
-from playlist_bridge.domain.models import SourceTrack, MatchDecision
+from playlist_bridge.domain.models import SourceTrack, MatchDecision, SpotifyCandidate
 
 
 def new_job_id() -> str:
@@ -213,9 +213,9 @@ def accepted_uris_in_source_order(
     """Return accepted Spotify URIs in source position order.
 
     This function filters source tracks by their match decisions, returning only
-    accepted tracks (those with decision_type == "accepted") while excluding
-    unavailable, skipped, ambiguous, and unmatched items. The results maintain
-    the original source playlist order, and duplicate source items remain
+    accepted tracks (those with status == "matched" and selected_candidate present)
+    while excluding unavailable, skipped, ambiguous, and unmatched items. The results
+    maintain the original source playlist order, and duplicate source items remain
     duplicated unless a later explicit deduplication option is enabled.
 
     Args:
@@ -229,6 +229,26 @@ def accepted_uris_in_source_order(
         ValueError: If tracks or decisions are invalid (e.g., mismatched).
 
     Examples:
+        >>> from playlist_bridge.domain.models import MatchScore, SpotifyCandidate
+        >>> candidate1 = SpotifyCandidate(
+        ...     track_id="xyz789",
+        ...     uri="spotify:track:xyz789",
+        ...     title="Song 1",
+        ...     artist_names=["Artist 1"],
+        ...     album="Album 1",
+        ...     duration_seconds=180,
+        ...     explicit=False,
+        ... )
+        >>> score1 = MatchScore(
+        ...     title_similarity=0.95,
+        ...     artist_similarity=0.9,
+        ...     duration_similarity=1.0,
+        ...     version_agreement=1.0,
+        ...     unwanted_version_penalty=0.0,
+        ...     explicit_state=1.0,
+        ...     total_score=0.95,
+        ...     reasons=["Good match"],
+        ... )
         >>> track1 = SourceTrack(
         ...     position=0,
         ...     title="Song 1",
@@ -247,37 +267,25 @@ def accepted_uris_in_source_order(
         ... )
         >>> decision1 = MatchDecision(
         ...     source_item_id="abc123",
-        ...     destination_uri="spotify:track:xyz789",
-        ...     destination_track_id="xyz789",
-        ...     destination_title="Song 1",
-        ...     destination_artist_names=["Artist 1"],
-        ...     score=0.95,
-        ...     decision_type="accepted",
-        ...     confidence=0.9,
+        ...     status="matched",
+        ...     selected_candidate=candidate1,
+        ...     score=score1,
+        ...     reason="Good match",
         ... )
         >>> decision2 = MatchDecision(
         ...     source_item_id="def456",
-        ...     destination_uri="spotify:track:uvw456",
-        ...     destination_track_id="uvw456",
-        ...     destination_title="Song 2",
-        ...     destination_artist_names=["Artist 2"],
-        ...     score=0.3,
-        ...     decision_type="unmatched",
-        ...     confidence=0.2,
+        ...     status="unmatched",
+        ...     reason="No suitable match",
         ... )
         >>> accepted_uris_in_source_order([track1, track2], [decision1, decision2])
         ['spotify:track:xyz789']
     """
-    from typing import Sequence
-
     # Build lookup from source_item_id to decision
     decision_lookup: dict[str, MatchDecision] = {}
     for decision in decisions:
         if decision.source_item_id in decision_lookup:
             # Duplicate decisions for same source item - keep the first one
-            # or raise? The spec says duplicates remain duplicated
-            # For lookup, we need to handle multiple decisions per track
-            # This shouldn't happen in normal operation
+            # For duplicate source items, this preserves the first decision
             continue
         decision_lookup[decision.source_item_id] = decision
 
@@ -301,10 +309,10 @@ def accepted_uris_in_source_order(
             continue
 
         # Check if the decision is accepted
-        # Accepted means decision_type == "accepted"
-        if decision.decision_type.lower() == "accepted":
-            result.append(decision.destination_uri)
+        # Accepted means status == "matched" and selected_candidate is not None
+        if decision.status == "matched" and decision.selected_candidate is not None:
+            result.append(decision.selected_candidate.uri)
         # Otherwise skip: unavailable, skipped, ambiguous, unmatched
-        # The decision_type values indicate these states
+        # The decision status indicates these states
 
     return result
