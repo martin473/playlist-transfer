@@ -643,39 +643,45 @@ def save_profile(session: Session, profile: AccountProfile) -> AccountProfile:
     Side Effects:
         writes to database: This function modifies the database.
     """
-    # Check if profile already exists
+    # Check if profile already exists using the correct field names
     existing = session.query(AccountProfileRecord).filter_by(
-        service=profile.provider,
-        profile_name=profile.account_id,
+        service=profile.service,
+        profile_name=profile.profile_name,
     ).first()
 
     if existing:
         # Update existing record
         existing.display_name = profile.display_name
-        existing.provider_user_id = getattr(profile, 'provider_user_id', profile.account_id)
+        existing.provider_user_id = profile.provider_user_id
         existing.updated_at = datetime.now(timezone.utc)
         session.commit()
         # Return the updated profile
         return AccountProfile(
-            provider=existing.service,
-            account_id=existing.profile_name,
+            profile_name=existing.profile_name,
+            service=existing.service,
+            provider_user_id=existing.provider_user_id,
             display_name=existing.display_name,
+            created_at=existing.created_at,
+            updated_at=existing.updated_at,
         )
     else:
         # Create new record
         record = AccountProfileRecord(
-            service=profile.provider,
-            profile_name=profile.account_id,
-            provider_user_id=getattr(profile, 'provider_user_id', profile.account_id),
+            service=profile.service,
+            profile_name=profile.profile_name,
+            provider_user_id=profile.provider_user_id,
             display_name=profile.display_name,
         )
         session.add(record)
         session.commit()
         # Return the saved profile
         return AccountProfile(
-            provider=record.service,
-            account_id=record.profile_name,
+            profile_name=record.profile_name,
+            service=record.service,
+            provider_user_id=record.provider_user_id,
             display_name=record.display_name,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
         )
 
 
@@ -700,13 +706,13 @@ def list_profiles(session: Session, service: str | None = None) -> list[AccountP
     profiles = []
     for record in records:
         profile = AccountProfile(
-            provider=record.service,
-            account_id=record.profile_name,
+            profile_name=record.profile_name,
+            service=record.service,
+            provider_user_id=record.provider_user_id,
             display_name=record.display_name,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
         )
-        # Add provider_user_id if it exists on the record
-        if hasattr(record, 'provider_user_id'):
-            profile.provider_user_id = record.provider_user_id
         profiles.append(profile)
 
     return profiles
@@ -735,12 +741,13 @@ def get_profile(session: Session, service: str, profile_name: str) -> AccountPro
         return None
 
     profile = AccountProfile(
-        provider=record.service,
-        account_id=record.profile_name,
+        profile_name=record.profile_name,
+        service=record.service,
+        provider_user_id=record.provider_user_id,
         display_name=record.display_name,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
-    if hasattr(record, 'provider_user_id'):
-        profile.provider_user_id = record.provider_user_id
 
     return profile
 

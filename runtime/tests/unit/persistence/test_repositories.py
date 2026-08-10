@@ -572,8 +572,9 @@ class TestSaveProfile:
 
         # Create a new profile
         profile = AccountProfile(
-            provider="spotify",
-            account_id="user123",
+            profile_name="user123",
+            service="spotify",
+            provider_user_id="user123",
             display_name="Test User",
         )
 
@@ -581,8 +582,8 @@ class TestSaveProfile:
         saved = save_profile(session=in_memory_session, profile=profile)
 
         # Verify the saved profile
-        assert saved.provider == "spotify"
-        assert saved.account_id == "user123"
+        assert saved.profile_name == "user123"
+        assert saved.service == "spotify"
         assert saved.display_name == "Test User"
 
         # Verify it was actually persisted
@@ -614,15 +615,16 @@ class TestSaveProfile:
 
         # Now update it via save_profile
         profile = AccountProfile(
-            provider="spotify",
-            account_id="user123",
+            profile_name="user123",
+            service="spotify",
+            provider_user_id="user123",
             display_name="New Name",
         )
         saved = save_profile(session=in_memory_session, profile=profile)
 
         # Verify the saved profile has updated display_name
-        assert saved.provider == "spotify"
-        assert saved.account_id == "user123"
+        assert saved.profile_name == "user123"
+        assert saved.service == "spotify"
         assert saved.display_name == "New Name"
 
         # Verify the database was updated
@@ -667,8 +669,9 @@ class TestSaveProfile:
         # Let's just verify that saving with same (service, profile_name)
         # updates rather than raises.
         profile = AccountProfile(
-            provider="spotify",
-            account_id="existing_user",
+            profile_name="existing_user",
+            service="spotify",
+            provider_user_id="existing_user",
             display_name="Updated User",
         )
         saved = save_profile(session=in_memory_session, profile=profile)
@@ -690,18 +693,21 @@ class TestSaveProfile:
 
         # Create multiple profiles
         profile1 = AccountProfile(
-            provider="spotify",
-            account_id="user1",
+            profile_name="user1",
+            service="spotify",
+            provider_user_id="user1",
             display_name="User One",
         )
         profile2 = AccountProfile(
-            provider="spotify",
-            account_id="user2",
+            profile_name="user2",
+            service="spotify",
+            provider_user_id="user2",
             display_name="User Two",
         )
         profile3 = AccountProfile(
-            provider="youtube",
-            account_id="yt_user1",
+            profile_name="yt_user1",
+            service="youtube",
+            provider_user_id="yt_user1",
             display_name="YouTube User",
         )
 
@@ -728,8 +734,9 @@ class TestSaveProfile:
 
         # Save a profile
         profile = AccountProfile(
-            provider="spotify",
-            account_id="user123",
+            profile_name="user123",
+            service="spotify",
+            provider_user_id="user123",
             display_name="Test User",
         )
         save_profile(session=in_memory_session, profile=profile)
@@ -742,8 +749,8 @@ class TestSaveProfile:
         )
 
         assert retrieved is not None
-        assert retrieved.provider == "spotify"
-        assert retrieved.account_id == "user123"
+        assert retrieved.profile_name == "user123"
+        assert retrieved.service == "spotify"
         assert retrieved.display_name == "Test User"
 
     def test_get_profile_returns_none_when_missing(self, in_memory_session: Session):
@@ -765,18 +772,21 @@ class TestSaveProfile:
 
         # Save profiles for different services
         profile1 = AccountProfile(
-            provider="spotify",
-            account_id="user1",
+            profile_name="user1",
+            service="spotify",
+            provider_user_id="user1",
             display_name="User One",
         )
         profile2 = AccountProfile(
-            provider="spotify",
-            account_id="user2",
+            profile_name="user2",
+            service="spotify",
+            provider_user_id="user2",
             display_name="User Two",
         )
         profile3 = AccountProfile(
-            provider="youtube",
-            account_id="yt_user1",
+            profile_name="yt_user1",
+            service="youtube",
+            provider_user_id="yt_user1",
             display_name="YouTube User",
         )
 
@@ -791,12 +801,12 @@ class TestSaveProfile:
         # Verify the profiles are returned as AccountProfile objects
         assert all(isinstance(p, AccountProfile) for p in profiles)
         # Check they're ordered by service then profile_name
-        assert profiles[0].provider == "spotify"
-        assert profiles[0].account_id == "user1"
-        assert profiles[1].provider == "spotify"
-        assert profiles[1].account_id == "user2"
-        assert profiles[2].provider == "youtube"
-        assert profiles[2].account_id == "yt_user1"
+        assert profiles[0].service == "spotify"
+        assert profiles[0].profile_name == "user1"
+        assert profiles[1].service == "spotify"
+        assert profiles[1].profile_name == "user2"
+        assert profiles[2].service == "youtube"
+        assert profiles[2].profile_name == "yt_user1"
 
     def test_list_profiles_filters_by_service(self, in_memory_session: Session):
         """list_profiles should filter by service when provided."""
@@ -805,18 +815,21 @@ class TestSaveProfile:
 
         # Save profiles for different services
         profile1 = AccountProfile(
-            provider="spotify",
-            account_id="user1",
+            profile_name="user1",
+            service="spotify",
+            provider_user_id="user1",
             display_name="User One",
         )
         profile2 = AccountProfile(
-            provider="spotify",
-            account_id="user2",
+            profile_name="user2",
+            service="spotify",
+            provider_user_id="user2",
             display_name="User Two",
         )
         profile3 = AccountProfile(
-            provider="youtube",
-            account_id="yt_user1",
+            profile_name="yt_user1",
+            service="youtube",
+            provider_user_id="yt_user1",
             display_name="YouTube User",
         )
 
@@ -830,7 +843,7 @@ class TestSaveProfile:
             service=DestinationService.SPOTIFY,
         )
         assert len(spotify_profiles) == 2
-        assert all(p.provider == "spotify" for p in spotify_profiles)
+        assert all(p.service == "spotify" for p in spotify_profiles)
 
         # List only youtube profiles
         youtube_profiles = list_profiles(
@@ -838,7 +851,7 @@ class TestSaveProfile:
             service=SourceService.YOUTUBE,
         )
         assert len(youtube_profiles) == 1
-        assert youtube_profiles[0].provider == "youtube"
+        assert youtube_profiles[0].service == "youtube"
 
         # List with non-existent service
         empty_profiles = list_profiles(
@@ -865,8 +878,9 @@ class TestGetProfile:
 
         # Save a profile
         profile = AccountProfile(
-            provider="spotify",
-            account_id="user123",
+            profile_name="user123",
+            service="spotify",
+            provider_user_id="user123",
             display_name="Test User",
         )
         save_profile(session=in_memory_session, profile=profile)
@@ -879,8 +893,8 @@ class TestGetProfile:
         )
 
         assert retrieved is not None
-        assert retrieved.provider == "spotify"
-        assert retrieved.account_id == "user123"
+        assert retrieved.profile_name == "user123"
+        assert retrieved.service == "spotify"
         assert retrieved.display_name == "Test User"
 
     def test_get_profile_returns_none_when_missing(self, in_memory_session: Session):
