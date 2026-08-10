@@ -737,6 +737,36 @@ def map_youtube_playlist_item(
     )
 
 
+def chunk_video_ids(video_ids: Sequence[str], chunk_size: int = 50) -> list[list[str]]:
+    """Split video IDs into batches of at most chunk_size.
+
+    Args:
+        video_ids: Sequence of video ID strings.
+        chunk_size: Maximum size of each batch. Defaults to 50 (YouTube API limit).
+
+    Returns:
+        List of batches, each a list of video IDs. The concatenation of all
+        batches reproduces the original ID order.
+
+    Examples:
+        >>> chunk_video_ids(["a", "b", "c", "d"], 2)
+        [["a", "b"], ["c", "d"]]
+        >>> chunk_video_ids(["a", "b", "c"], 5)
+        [["a", "b", "c"]]
+        >>> chunk_video_ids([], 2)
+        []
+
+    Note:
+        - The chunk_size must be positive.
+        - Each batch preserves the original order of IDs.
+        - The concatenation of batches equals the original sequence.
+    """
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+
+    return [list(video_ids[i:i + chunk_size]) for i in range(0, len(video_ids), chunk_size)]
+
+
 def unique_video_ids(items: Sequence[SourceTrack]) -> list[str]:
     """Return unique available video IDs in stable first-seen order.
 

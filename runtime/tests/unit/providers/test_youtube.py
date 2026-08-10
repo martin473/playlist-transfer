@@ -8,6 +8,8 @@ from playlist_bridge.providers.youtube import (
     fetch_youtube_playlist_metadata,
     fetch_youtube_playlist_item_page,
     iter_youtube_playlist_items,
+    chunk_video_ids,
+    unique_video_ids,
 )
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
@@ -1292,6 +1294,67 @@ class TestMapYouTubePlaylistItem:
         assert track.video_id.startswith("private_")
         assert track.channel_title == "Some Channel"
         assert track.availability == "unavailable"
+
+
+class TestChunkVideoIds:
+    """Tests for chunk_video_ids function."""
+
+    def test_chunk_smaller_than_chunk_size(self) -> None:
+        """Test chunking when video IDs are fewer than chunk size."""
+        video_ids = ["a", "b", "c"]
+        result = chunk_video_ids(video_ids, 5)
+        assert result == [["a", "b", "c"]]
+
+    def test_chunk_exact_multiple(self) -> None:
+        """Test chunking when video IDs exactly fill multiple chunks."""
+        video_ids = ["a", "b", "c", "d"]
+        result = chunk_video_ids(video_ids, 2)
+        assert result == [["a", "b"], ["c", "d"]]
+
+    def test_chunk_uneven_multiple(self) -> None:
+        """Test chunking when video IDs don't divide evenly."""
+        video_ids = ["a", "b", "c", "d", "e"]
+        result = chunk_video_ids(video_ids, 2)
+        assert result == [["a", "b"], ["c", "d"], ["e"]]
+
+    def test_chunk_empty_list(self) -> None:
+        """Test chunking an empty list."""
+        result = chunk_video_ids([], 2)
+        assert result == []
+
+    def test_chunk_default_chunk_size(self) -> None:
+        """Test chunking with default chunk_size of 50."""
+        video_ids = [f"id{i}" for i in range(75)]
+        result = chunk_video_ids(video_ids)
+        assert len(result) == 2
+        assert len(result[0]) == 50
+        assert len(result[1]) == 25
+        # Verify concatenation preserves order
+        combined = []
+        for batch in result:
+            combined.extend(batch)
+        assert combined == video_ids
+
+    def test_chunk_preserves_order(self) -> None:
+        """Test that chunking preserves the original order of video IDs."""
+        video_ids = ["id1", "id2", "id3", "id4", "id5", "id6"]
+        result = chunk_video_ids(video_ids, 3)
+        # Verify each batch preserves order
+        assert result[0] == ["id1", "id2", "id3"]
+        assert result[1] == ["id4", "id5", "id6"]
+        # Verify concatenation preserves order
+        combined = []
+        for batch in result:
+            combined.extend(batch)
+        assert combined == video_ids
+
+    def test_chunk_rejects_non_positive_chunk_size(self) -> None:
+        """Test that chunk_size must be positive."""
+        with pytest.raises(ValueError, match="chunk_size must be positive"):
+            chunk_video_ids(["a", "b"], 0)
+
+        with pytest.raises(ValueError, match="chunk_size must be positive"):
+            chunk_video_ids(["a", "b"], -1)
 
 
 class TestUniqueVideoIds:
