@@ -23,6 +23,7 @@ from playlist_bridge.persistence.repositories import (
     get_job,
     get_source_tracks_ordered,
     get_unresolved_decisions,
+    heartbeat_job_lease,
     list_recent_jobs,
     lookup_match_cache,
     lookup_manual_correction,
@@ -2735,3 +2736,237 @@ class TestAcquireJobLease:
         assert lease2.owner_id == owner2
         assert lease2.token != token1
         assert lease2.row_version > lease1.row_version
+
+
+class TestHeartbeatJobLease:
+    """Tests for heartbeat_job_lease function."""
+
+    def test_heartbeat_successful(self, in_memory_session: Session):
+        """Successful heartbeat extends the lease."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner_id = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # First acquisition
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now1,
+            lease_duration,
+        )
+
+        # Heartbeat
+        now2 = datetime(2024, 1, 1, 12, 30, 30, tzinfo=timezone.utc)
+        lease2 = heartbeat_job_lease(
+            in_memory_session,
+            lease1,
+            now2,
+            lease_duration,
+        )
+
+        # Verify the lease was extended
+        assert lease2.job_id == job_id
+        assert lease2.owner_id == owner_id
+        assert lease2.token != lease1.token  # New token generated
+        assert lease2.expires_at == now2 + lease_duration
+        assert lease2.lease_heartbeat_at == now2
+        assert lease2.row_version == lease1.row_version + 1
+
+        # Verify the database was updated
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner_id
+        # Compare datetime values (SQLite may strip microseconds and timezone)
+        # Convert stored value to UTC for comparison
+        stored_expires = job.lease_expires_at.replace(tzinfo=timezone.utc) if job.lease_expires_at else None
+        stored_heartbeat = job.lease_heartbeat_at.replace(tzinfo=timezone.utc) if job.lease_heartbeat_at else None
+        expected_expires = (now2 + lease_duration).replace(microsecond=0)
+        expected_heartbeat = now2.replace(microsecond=0)
+        assert stored_expires.replace(microsecond=0) == expected_expires
+        assert stored_heartbeat.replace(microsecond=0) == expected_heartbeat
+        assert job.row_version == lease1.row_version + 1
+
+    def test_heartbeat_fails_on_owner_mismatch(self, in_memory_session: Session):
+        """Heartbeat fails when the lease holder doesn't match."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner1 = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # First acquisition by owner1
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner1,
+            now1,
+            lease_duration,
+        )
+
+        # Try to heartbeat with a different owner
+        now2 = datetime(2024, 1, 1, 12, 30, 30, tzinfo=timezone.utc)
+        lease_wrong_owner = JobLease(
+            job_id=job_id,
+            owner_id="wrong-owner",
+            token=lease1.token,
+            expires_at=lease1.expires_at,
+            row_version=lease1.row_version,
+            lease_heartbeat_at=lease1.lease_heartbeat_at,
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            heartbeat_job_lease(
+                in_memory_session,
+                lease_wrong_owner,
+                now2,
+                lease_duration,
+            )
+
+        assert exc_info.value.job_id == job_id
+
+    def test_heartbeat_fails_on_token_mismatch(self, in_memory_session: Session):
+        """Heartbeat fails when the token doesn't match."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner_id = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # First acquisition
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now1,
+            lease_duration,
+        )
+
+        # Try to heartbeat with a wrong token
+        now2 = datetime(2024, 1, 1, 12, 30, 30, tzinfo=timezone.utc)
+        lease_wrong_token = JobLease(
+            job_id=job_id,
+            owner_id=owner_id,
+            token="wrong-token-1234567890",
+            expires_at=lease1.expires_at,
+            row_version=lease1.row_version,
+            lease_heartbeat_at=lease1.lease_heartbeat_at,
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            heartbeat_job_lease(
+                in_memory_session,
+                lease_wrong_token,
+                now2,
+                lease_duration,
+            )
+
+        assert exc_info.value.job_id == job_id
+
+    def test_heartbeat_fails_on_row_version_mismatch(self, in_memory_session: Session):
+        """Heartbeat fails when the row version doesn't match."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner_id = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # First acquisition
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now1,
+            lease_duration,
+        )
+
+        # Try to heartbeat with an old row version
+        now2 = datetime(2024, 1, 1, 12, 30, 30, tzinfo=timezone.utc)
+        lease_old_version = JobLease(
+            job_id=job_id,
+            owner_id=owner_id,
+            token=lease1.token,
+            expires_at=lease1.expires_at,
+            row_version=999,  # Wrong version
+            lease_heartbeat_at=lease1.lease_heartbeat_at,
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            heartbeat_job_lease(
+                in_memory_session,
+                lease_old_version,
+                now2,
+                lease_duration,
+            )
+
+        assert exc_info.value.job_id == job_id
+
+    def test_heartbeat_fails_on_nonexistent_job(self, in_memory_session: Session):
+        """Heartbeat raises JobNotFoundError for non-existent job."""
+        job_id = str(uuid.uuid4())
+        lease = JobLease(
+            job_id=job_id,
+            owner_id="process-123",
+            token="some-token",
+            expires_at=datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc),
+            row_version=1,
+            lease_heartbeat_at=datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc),
+        )
+        now = datetime(2024, 1, 1, 12, 30, 30, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        with pytest.raises(JobNotFoundError) as exc_info:
+            heartbeat_job_lease(
+                in_memory_session,
+                lease,
+                now,
+                lease_duration,
+            )
+
+        assert exc_info.value.job_id == job_id

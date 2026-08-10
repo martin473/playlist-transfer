@@ -434,6 +434,85 @@ def acquire_job_lease(
     )
 
 
+def heartbeat_job_lease(
+    session: Session,
+    lease: JobLease,
+    now: datetime,
+    lease_duration: timedelta,
+) -> JobLease:
+    """Extend a job lease with a heartbeat.
+
+    This function extends the lease expiry by lease_duration seconds only when
+    the job ID, owner, token hash, and expected row version match. It updates
+    the heartbeat time and increments the row version in one transaction.
+
+    The lease must be currently held by the caller. A stale token or row version
+    cannot extend the lease.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        lease: The current JobLease object containing the lease details.
+        now: Current timestamp (timezone-aware).
+        lease_duration: Duration for which to extend the lease.
+
+    Returns:
+        An updated JobLease instance with the new expiration time,
+        heartbeat time, and incremented row version.
+
+    Raises:
+        JobNotFoundError: If no job exists with the given lease.job_id.
+        LeaseLostError: If the lease is stale - owner mismatch, token mismatch,
+            or row version mismatch.
+
+    Side Effects:
+        sqlite_read, sqlite_write: Reads the job record and updates the
+        lease expiration, heartbeat timestamp, row_version, and updated_at.
+        All changes are committed atomically.
+    """
+    # Lock the row for update to prevent race conditions
+    job = session.query(JobRecord).filter_by(id=lease.job_id).with_for_update().first()
+    if job is None:
+        raise JobNotFoundError(lease.job_id)
+
+    # Validate the lease matches the current state
+    # Check owner
+    if job.lease_holder != lease.owner_id:
+        raise LeaseLostError(lease.job_id)
+
+    # Check token hash
+    token_hash = _compute_token_hash(lease.token)
+    if job.lease_token_hash != token_hash:
+        raise LeaseLostError(lease.job_id)
+
+    # Check row version
+    if job.row_version != lease.row_version:
+        raise LeaseLostError(lease.job_id)
+
+    # All checks passed - extend the lease
+    job.lease_expires_at = now + lease_duration
+    job.lease_heartbeat_at = now
+    job.row_version += 1
+    job.updated_at = now
+
+    session.commit()
+
+    # Generate a new token for the extended lease
+    new_token = _generate_lease_token()
+    new_token_hash = _compute_token_hash(new_token)
+    job.lease_token_hash = new_token_hash
+
+    session.commit()
+
+    return JobLease(
+        job_id=lease.job_id,
+        owner_id=lease.owner_id,
+        token=new_token,
+        expires_at=now + lease_duration,
+        row_version=job.row_version,
+        lease_heartbeat_at=now,
+    )
+
+
 def update_job_state(
     session: Session,
     job_id: str,
