@@ -15,7 +15,9 @@ from playlist_bridge.persistence.models import JobRecord, ManualCorrection, Matc
 from playlist_bridge.persistence.repositories import (
     JobNotFoundError,
     JobLease,
+    JobLeaseBusyError,
     LeaseLostError,
+    acquire_job_lease,
     bulk_insert_source_tracks,
     create_job,
     get_job,
@@ -2406,3 +2408,330 @@ class TestListRecentJobs:
         assert len(results) == 2
         assert results[0].id > results[1].id
         assert results[0].created_at == results[1].created_at
+
+
+class TestAcquireJobLease:
+    """Tests for acquire_job_lease function."""
+
+    def test_acquire_lease_first_acquisition(self, in_memory_session: Session):
+        """First acquisition creates a new lease with a token."""
+        # Create a job first
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        # Acquire the lease
+        owner_id = "process-123"
+        now = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        lease = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now,
+            lease_duration,
+        )
+
+        # Verify the lease
+        assert lease.job_id == job_id
+        assert lease.owner_id == owner_id
+        assert lease.lease_holder == owner_id
+        assert lease.token is not None
+        assert len(lease.token) == 32  # 16 bytes hex = 32 chars
+        assert lease.expires_at == now + lease_duration
+        assert lease.lease_expires_at == now + lease_duration
+        assert lease.row_version == 2  # Initial row_version is 1
+        assert lease.lease_heartbeat_at == now
+
+        # Verify the database was updated
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner_id
+        assert job.lease_token_hash is not None
+        assert job.lease_expires_at is not None
+        assert job.lease_expires_at.replace(tzinfo=timezone.utc) == (now + lease_duration).replace(tzinfo=timezone.utc)
+        assert job.lease_heartbeat_at == now
+        assert job.row_version == 2
+
+    def test_acquire_lease_reentrant_with_same_owner(self, in_memory_session: Session):
+        """Reentrant acquisition with the same owner renews the lease."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner_id = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # First acquisition
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now1,
+            lease_duration,
+        )
+        token1 = lease1.token
+        row_version1 = lease1.row_version
+
+        # Reentrant acquisition with the same owner (no token needed for same owner)
+        now2 = datetime(2024, 1, 1, 12, 31, 0, tzinfo=timezone.utc)
+        lease2 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now2,
+            lease_duration,
+        )
+
+        # Verify the lease was renewed with a new token and row_version
+        assert lease2.job_id == job_id
+        assert lease2.owner_id == owner_id
+        assert lease2.token != token1  # New token
+        assert lease2.row_version == row_version1 + 1
+        assert lease2.expires_at == now2 + lease_duration
+        assert lease2.lease_heartbeat_at == now2
+
+        # Verify the database was updated
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner_id
+        assert job.row_version == row_version1 + 1
+        assert job.lease_expires_at.replace(tzinfo=timezone.utc) == (now2 + lease_duration).replace(tzinfo=timezone.utc)
+
+    def test_acquire_lease_reentrant_with_current_token(self, in_memory_session: Session):
+        """Reentrant acquisition with the current token renews the lease."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner_id = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # First acquisition
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now1,
+            lease_duration,
+        )
+        token1 = lease1.token
+        row_version1 = lease1.row_version
+
+        # Try to acquire with a different owner but same token (should succeed, renewing the lease)
+        different_owner = "process-456"
+        now2 = datetime(2024, 1, 1, 12, 31, 0, tzinfo=timezone.utc)
+        lease2 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            different_owner,
+            now2,
+            lease_duration,
+            current_token=token1,
+        )
+
+        # Verify the lease was renewed with the new owner
+        assert lease2.job_id == job_id
+        assert lease2.owner_id == different_owner
+        assert lease2.token != token1  # New token
+        assert lease2.row_version == row_version1 + 1
+        assert lease2.expires_at == now2 + lease_duration
+        assert lease2.lease_heartbeat_at == now2
+
+        # Verify the database was updated with the new owner
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == different_owner
+        assert job.row_version == row_version1 + 1
+
+    def test_acquire_lease_rejects_different_owner_without_token(self, in_memory_session: Session):
+        """Different owner cannot acquire a live lease without the token."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner1 = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # First acquisition
+        acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner1,
+            now1,
+            lease_duration,
+        )
+
+        # Different owner tries to acquire without token - should fail
+        owner2 = "process-456"
+        now2 = datetime(2024, 1, 1, 12, 31, 0, tzinfo=timezone.utc)
+
+        with pytest.raises(JobLeaseBusyError) as exc_info:
+            acquire_job_lease(
+                in_memory_session,
+                job_id,
+                owner2,
+                now2,
+                lease_duration,
+            )
+
+        assert exc_info.value.job_id == job_id
+        assert exc_info.value.owner_id == owner1
+        assert "held by another owner" in str(exc_info.value)
+
+    def test_acquire_lease_rejects_wrong_token(self, in_memory_session: Session):
+        """Different owner cannot acquire a live lease with a wrong token."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner1 = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # First acquisition
+        acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner1,
+            now1,
+            lease_duration,
+        )
+
+        # Different owner tries to acquire with wrong token - should fail
+        owner2 = "process-456"
+        now2 = datetime(2024, 1, 1, 12, 31, 0, tzinfo=timezone.utc)
+
+        with pytest.raises(JobLeaseBusyError) as exc_info:
+            acquire_job_lease(
+                in_memory_session,
+                job_id,
+                owner2,
+                now2,
+                lease_duration,
+                current_token="wrong-token-1234567890",
+            )
+
+        assert exc_info.value.job_id == job_id
+        assert exc_info.value.owner_id == owner1
+
+    def test_acquire_lease_raises_job_not_found(self, in_memory_session: Session):
+        """acquire_job_lease raises JobNotFoundError for non-existent job."""
+        job_id = str(uuid.uuid4())
+        owner_id = "process-123"
+        now = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        with pytest.raises(JobNotFoundError) as exc_info:
+            acquire_job_lease(
+                in_memory_session,
+                job_id,
+                owner_id,
+                now,
+                lease_duration,
+            )
+
+        assert exc_info.value.job_id == job_id
+
+    def test_acquire_lease_after_expiration(self, in_memory_session: Session):
+        """After a lease expires, a new owner can acquire it."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner1 = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # First acquisition
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner1,
+            now1,
+            lease_duration,
+        )
+        token1 = lease1.token
+
+        # Advance time past expiration
+        now2 = datetime(2024, 1, 1, 12, 31, 35, tzinfo=timezone.utc)  # 95 seconds later
+
+        # Different owner should be able to acquire after expiration
+        owner2 = "process-456"
+        # We need to manually expire the lease in the database for this test
+        # since the acquire function checks existing_expires_at
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        # Set the expiration to the past
+        job.lease_expires_at = datetime(2024, 1, 1, 12, 31, 0, tzinfo=timezone.utc)
+        in_memory_session.commit()
+
+        # Now acquire with new owner
+        lease2 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner2,
+            now2,
+            lease_duration,
+        )
+
+        assert lease2.owner_id == owner2
+        assert lease2.token != token1
+        assert lease2.row_version > lease1.row_version

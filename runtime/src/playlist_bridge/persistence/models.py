@@ -39,6 +39,7 @@ class JobRecord(Base):
     lease_holder: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     lease_expires_at: Mapped[Optional[datetime]] = mapped_column(types.DateTime(timezone=True), nullable=True)
     lease_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(types.DateTime(timezone=True), nullable=True)
+    lease_token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     def __repr__(self) -> str:
