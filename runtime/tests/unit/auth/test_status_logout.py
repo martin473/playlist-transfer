@@ -576,7 +576,7 @@ class TestProbeSpotifyAuthStatus:
             mock_profile.display_name = "Test User"
             mock_probe.return_value = mock_profile
 
-            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+            with patch("spotipy.Spotify") as mock_spotify:
                 mock_client = MagicMock()
                 mock_spotify.return_value = mock_client
 
@@ -617,7 +617,7 @@ class TestProbeSpotifyAuthStatus:
                 safe_message="Token expired",
             )
 
-            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+            with patch("spotipy.Spotify") as mock_spotify:
                 mock_client = MagicMock()
                 mock_spotify.return_value = mock_client
 
@@ -684,9 +684,9 @@ class TestProbeSpotifyAuthStatus:
                 safe_message="Invalid token",
             )
 
-            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+            with patch("spotipy.Spotify") as mock_spotify:
                 mock_client = MagicMock()
-                mock_spotify.Spotify.return_value = mock_client
+                mock_spotify.return_value = mock_client
 
                 result = probe_spotify_auth_status(
                     profile_name="test-profile",
@@ -750,7 +750,7 @@ class TestProbeSpotifyAuthStatus:
                 safe_message="Access denied",
             )
 
-            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+            with patch("spotipy.Spotify") as mock_spotify:
                 mock_client = MagicMock()
                 mock_spotify.return_value = mock_client
 
@@ -784,7 +784,7 @@ class TestProbeSpotifyAuthStatus:
                 safe_message="Access denied",
             )
 
-            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+            with patch("spotipy.Spotify") as mock_spotify:
                 mock_client = MagicMock()
                 mock_spotify.return_value = mock_client
 
@@ -819,7 +819,7 @@ class TestProbeSpotifyAuthStatus:
                 safe_message="Rate limit exceeded",
             )
 
-            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+            with patch("spotipy.Spotify") as mock_spotify:
                 mock_client = MagicMock()
                 mock_spotify.return_value = mock_client
 
@@ -849,7 +849,7 @@ class TestProbeSpotifyAuthStatus:
         with patch("playlist_bridge.auth.spotify.probe_spotify_identity") as mock_probe:
             mock_probe.side_effect = RuntimeError("Unexpected network error")
 
-            with patch("playlist_bridge.auth.spotify.spotipy") as mock_spotify:
+            with patch("spotipy.Spotify") as mock_spotify:
                 mock_client = MagicMock()
                 mock_spotify.return_value = mock_client
 
