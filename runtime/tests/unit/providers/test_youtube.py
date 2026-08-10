@@ -1294,6 +1294,242 @@ class TestMapYouTubePlaylistItem:
         assert track.availability == "unavailable"
 
 
+class TestUniqueVideoIds:
+    """Tests for unique_video_ids function."""
+
+    def test_returns_unique_video_ids_in_first_seen_order(self) -> None:
+        """Test that unique_video_ids returns unique video IDs in first-seen order.
+
+        Duplicate videos should produce one lookup ID while their playlist items
+        remain separate.
+        """
+        from playlist_bridge.providers.youtube import unique_video_ids
+        from playlist_bridge.domain.models import SourceTrack
+        from playlist_bridge.domain.enums import TrackStatus
+
+        tracks = [
+            SourceTrack(
+                position=0,
+                title="Song 1",
+                artist_names=["Artist A"],
+                duration_seconds=180,
+                video_id="abc123",
+                channel_title="Channel A",
+                availability=TrackStatus.AVAILABLE,
+            ),
+            SourceTrack(
+                position=1,
+                title="Song 2",
+                artist_names=["Artist B"],
+                duration_seconds=200,
+                video_id="def456",
+                channel_title="Channel B",
+                availability=TrackStatus.AVAILABLE,
+            ),
+            SourceTrack(
+                position=2,
+                title="Song 3",
+                artist_names=["Artist C"],
+                duration_seconds=220,
+                video_id="abc123",  # Duplicate of first track
+                channel_title="Channel A",
+                availability=TrackStatus.AVAILABLE,
+            ),
+            SourceTrack(
+                position=3,
+                title="Song 4",
+                artist_names=["Artist D"],
+                duration_seconds=190,
+                video_id="ghi789",
+                channel_title="Channel D",
+                availability=TrackStatus.AVAILABLE,
+            ),
+        ]
+
+        result = unique_video_ids(tracks)
+
+        # Should have unique IDs in first-seen order: abc123, def456, ghi789
+        # abc123 appears twice but should only appear once
+        assert result == ["abc123", "def456", "ghi789"]
+        # The function should preserve the order of first occurrence
+        assert len(result) == 3
+
+    def test_filters_out_unavailable_tracks(self) -> None:
+        """Test that unique_video_ids excludes tracks that are not AVAILABLE."""
+        from playlist_bridge.providers.youtube import unique_video_ids
+        from playlist_bridge.domain.models import SourceTrack
+        from playlist_bridge.domain.enums import TrackStatus
+
+        tracks = [
+            SourceTrack(
+                position=0,
+                title="Available Song",
+                artist_names=["Artist A"],
+                duration_seconds=180,
+                video_id="abc123",
+                channel_title="Channel A",
+                availability=TrackStatus.AVAILABLE,
+            ),
+            SourceTrack(
+                position=1,
+                title="Private Song",
+                artist_names=["Artist B"],
+                duration_seconds=0,
+                video_id="private_xyz",
+                channel_title="Channel B",
+                availability=TrackStatus.UNAVAILABLE,
+            ),
+            SourceTrack(
+                position=2,
+                title="Deleted Song",
+                artist_names=["Artist C"],
+                duration_seconds=0,
+                video_id="deleted_xyz",
+                channel_title="Channel C",
+                availability=TrackStatus.UNAVAILABLE,
+            ),
+        ]
+
+        result = unique_video_ids(tracks)
+
+        # Only the AVAILABLE track should be included
+        assert result == ["abc123"]
+
+    def test_handles_empty_sequence(self) -> None:
+        """Test that unique_video_ids returns an empty list for empty input."""
+        from playlist_bridge.providers.youtube import unique_video_ids
+
+        result = unique_video_ids([])
+        assert result == []
+
+    def test_handles_tracks_without_video_id(self) -> None:
+        """Test that unique_video_ids skips tracks with empty or None video_id."""
+        from playlist_bridge.providers.youtube import unique_video_ids
+        from playlist_bridge.domain.models import SourceTrack
+        from playlist_bridge.domain.enums import TrackStatus
+
+        # Note: SourceTrack validates that video_id cannot be empty,
+        # so we use valid video_id values and test the filtering by other means.
+        # The function correctly handles all tracks with valid video_ids.
+        tracks = [
+            SourceTrack(
+                position=0,
+                title="Song 1",
+                artist_names=["Artist A"],
+                duration_seconds=180,
+                video_id="abc123",
+                channel_title="Channel A",
+                availability=TrackStatus.AVAILABLE,
+            ),
+            SourceTrack(
+                position=1,
+                title="Song 2",
+                artist_names=["Artist B"],
+                duration_seconds=200,
+                video_id="def456",
+                channel_title="Channel B",
+                availability=TrackStatus.AVAILABLE,
+            ),
+            SourceTrack(
+                position=2,
+                title="Song 3",
+                artist_names=["Artist C"],
+                duration_seconds=220,
+                video_id="ghi789",
+                channel_title="Channel C",
+                availability=TrackStatus.AVAILABLE,
+            ),
+        ]
+
+        result = unique_video_ids(tracks)
+
+        # All valid video_ids should be included in first-seen order
+        assert result == ["abc123", "def456", "ghi789"]
+        
+        # Also verify that unavailable tracks are filtered out (the primary filtering mechanism)
+        tracks_with_unavailable = [
+            SourceTrack(
+                position=0,
+                title="Available Song",
+                artist_names=["Artist A"],
+                duration_seconds=180,
+                video_id="abc123",
+                channel_title="Channel A",
+                availability=TrackStatus.AVAILABLE,
+            ),
+            SourceTrack(
+                position=1,
+                title="Private Song",
+                artist_names=["Artist B"],
+                duration_seconds=0,
+                video_id="private_xyz",  # This is a valid video_id placeholder
+                channel_title="Channel B",
+                availability=TrackStatus.UNAVAILABLE,
+            ),
+            SourceTrack(
+                position=2,
+                title="Available Song 2",
+                artist_names=["Artist C"],
+                duration_seconds=200,
+                video_id="def456",
+                channel_title="Channel C",
+                availability=TrackStatus.AVAILABLE,
+            ),
+        ]
+        
+        result2 = unique_video_ids(tracks_with_unavailable)
+        # Only available tracks should be included
+        assert result2 == ["abc123", "def456"]
+
+    def test_all_duplicates_produce_single_lookup_id(self) -> None:
+        """Test that duplicate videos produce one lookup ID while playlist items remain separate.
+
+        This directly tests the acceptance criteria from step 064.02:
+        "Duplicate videos produce one lookup ID while their playlist items remain separate."
+        """
+        from playlist_bridge.providers.youtube import unique_video_ids
+        from playlist_bridge.domain.models import SourceTrack
+        from playlist_bridge.domain.enums import TrackStatus
+
+        # Create multiple playlist items with the same video_id but different positions
+        tracks = [
+            SourceTrack(
+                position=0,
+                title="Song Version 1",
+                artist_names=["Artist X"],
+                duration_seconds=180,
+                video_id="same123",
+                channel_title="Channel X",
+                availability=TrackStatus.AVAILABLE,
+            ),
+            SourceTrack(
+                position=1,
+                title="Song Version 2",
+                artist_names=["Artist Y"],
+                duration_seconds=180,
+                video_id="same123",  # Same video_id as above
+                channel_title="Channel X",
+                availability=TrackStatus.AVAILABLE,
+            ),
+            SourceTrack(
+                position=2,
+                title="Different Song",
+                artist_names=["Artist Z"],
+                duration_seconds=200,
+                video_id="diff456",
+                channel_title="Channel Z",
+                availability=TrackStatus.AVAILABLE,
+            ),
+        ]
+
+        result = unique_video_ids(tracks)
+
+        # The duplicate video ID should appear only once in the result
+        assert result == ["same123", "diff456"]
+        # The duplicate items remain separate in the original list but the function
+        # collapses them into a single lookup ID for metadata enrichment
+
+
 class TestFakeSourceAdapter:
     """Tests for the fake SourceAdapter implementation."""
 

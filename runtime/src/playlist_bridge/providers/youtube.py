@@ -735,3 +735,48 @@ def map_youtube_playlist_item(
         channel_title=channel_title if channel_title else None,
         availability=availability,
     )
+
+
+def unique_video_ids(items: Sequence[SourceTrack]) -> list[str]:
+    """Return unique available video IDs in stable first-seen order.
+
+    This function extracts video IDs from a sequence of SourceTrack objects,
+    filtering to include only tracks with AVAILABLE status, and returns them
+    in the order they first appear, with duplicates removed.
+
+    Args:
+        items: Sequence of SourceTrack objects from a YouTube playlist.
+
+    Returns:
+        List of video IDs (strings) for available tracks, in first-seen order,
+        with duplicates removed.
+
+    Examples:
+        >>> tracks = [
+        ...     SourceTrack(position=0, title="Song 1", artist_names=["Artist"], duration_seconds=180, video_id="abc123", availability=TrackStatus.AVAILABLE),
+        ...     SourceTrack(position=1, title="Song 2", artist_names=["Artist"], duration_seconds=200, video_id="def456", availability=TrackStatus.AVAILABLE),
+        ...     SourceTrack(position=2, title="Song 3", artist_names=["Artist"], duration_seconds=220, video_id="abc123", availability=TrackStatus.AVAILABLE),
+        ... ]
+        >>> unique_video_ids(tracks)
+        ['abc123', 'def456']
+
+    Note:
+        - Only tracks with TrackStatus.AVAILABLE are included.
+        - Duplicate video IDs are removed while preserving first-seen order.
+        - Tracks with empty or None video IDs are ignored.
+    """
+    from playlist_bridge.domain.enums import TrackStatus
+
+    seen = set()
+    result = []
+    for track in items:
+        # Skip unavailable tracks or tracks with no video_id
+        if track.availability != TrackStatus.AVAILABLE:
+            continue
+        if not track.video_id:
+            continue
+        # Only add if we haven't seen this video_id before
+        if track.video_id not in seen:
+            seen.add(track.video_id)
+            result.append(track.video_id)
+    return result
