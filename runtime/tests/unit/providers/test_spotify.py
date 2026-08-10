@@ -1,8 +1,181 @@
 """Tests for Spotify provider utilities."""
 
 import pytest
+from typing import List, Sequence
 
-from playlist_bridge.providers.spotify import chunk_uris
+from playlist_bridge.providers.spotify import chunk_uris, SpotifyAdapter
+from playlist_bridge.domain.models import AccountProfile, SpotifyCandidate, PlaylistReference
+from playlist_bridge.providers.errors import (
+    AuthenticationRequired,
+    PermissionDenied,
+    ProviderNotFound,
+    RateLimited,
+    InvalidProviderResponse,
+    TemporaryProviderFailure,
+    CancellationRequested,
+)
+from playlist_bridge.jobs.cancellation import FakeCancellationToken, CancellationToken
+
+
+class FakeSpotifyAdapter:
+    """Minimal fake adapter that satisfies the SpotifyAdapter protocol."""
+
+    def identity(
+        self,
+        *,
+        cancel: CancellationToken,
+    ) -> AccountProfile:
+        """Return a fake identity profile."""
+        return AccountProfile(
+            profile_name="fake_profile",
+            service="spotify",
+            provider_user_id="fake_user_123",
+            display_name="Fake User",
+        )
+
+    def search_tracks(
+        self,
+        query: str,
+        *,
+        cancel: CancellationToken,
+        limit: int = 10,
+    ) -> List[SpotifyCandidate]:
+        """Return fake search results."""
+        return [
+            SpotifyCandidate(
+                track_id="fake_track_1",
+                uri="spotify:track:fake_track_1",
+                title="Fake Track 1",
+                artist_names=["Fake Artist"],
+                album="Fake Album",
+                duration_seconds=180,
+                explicit=False,
+                isrc=None,
+            )
+        ]
+
+    def create_playlist(
+        self,
+        name: str,
+        *,
+        cancel: CancellationToken,
+        description: str = "",
+        public: bool = False,
+    ) -> PlaylistReference:
+        """Return a fake playlist reference."""
+        return PlaylistReference(
+            provider="spotify",
+            playlist_id="fake_playlist_123",
+            name=name,
+            owner="fake_user_123",
+        )
+
+    def add_items(
+        self,
+        playlist_id: str,
+        uris: Sequence[str],
+        *,
+        cancel: CancellationToken,
+        position: int = 0,
+    ) -> int:
+        """Return the number of items added."""
+        return len(uris)
+
+    def replace_items(
+        self,
+        playlist_id: str,
+        uris: Sequence[str],
+        *,
+        cancel: CancellationToken,
+    ) -> int:
+        """Return the number of items replaced."""
+        return len(uris)
+
+    def read_items(
+        self,
+        playlist_id: str,
+        *,
+        cancel: CancellationToken,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[SpotifyCandidate]:
+        """Return fake playlist items."""
+        return [
+            SpotifyCandidate(
+                track_id="fake_track_1",
+                uri="spotify:track:fake_track_1",
+                title="Fake Track 1",
+                artist_names=["Fake Artist"],
+                album="Fake Album",
+                duration_seconds=180,
+                explicit=False,
+                isrc=None,
+            )
+        ]
+
+    def user_playlists(
+        self,
+        *,
+        cancel: CancellationToken,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[PlaylistReference]:
+        """Return fake user playlists."""
+        return [
+            PlaylistReference(
+                provider="spotify",
+                playlist_id="fake_playlist_1",
+                name="Fake Playlist 1",
+                owner="fake_user_123",
+            ),
+            PlaylistReference(
+                provider="spotify",
+                playlist_id="fake_playlist_2",
+                name="Fake Playlist 2",
+                owner="fake_user_123",
+            ),
+        ]
+
+
+def test_fake_adapter_satisfies_protocol() -> None:
+    """Test that the fake adapter satisfies the SpotifyAdapter protocol.
+
+    This test verifies that the fake adapter is assignable to the protocol type
+    and that all required methods are present with the correct signatures.
+    """
+    # The protocol check is structural - we verify methods exist and have the right signatures
+    adapter: SpotifyAdapter = FakeSpotifyAdapter()
+    # Check all required methods exist
+    assert hasattr(adapter, "identity")
+    assert hasattr(adapter, "search_tracks")
+    assert hasattr(adapter, "create_playlist")
+    assert hasattr(adapter, "add_items")
+    assert hasattr(adapter, "replace_items")
+    assert hasattr(adapter, "read_items")
+    assert hasattr(adapter, "user_playlists")
+    # Verify methods are callable with expected signatures
+    cancel = FakeCancellationToken()
+    # Test identity
+    result = adapter.identity(cancel=cancel)
+    assert isinstance(result, AccountProfile)
+    # Test search_tracks
+    results = adapter.search_tracks("test", cancel=cancel)
+    assert isinstance(results, list)
+    # Test create_playlist
+    playlist = adapter.create_playlist("test", cancel=cancel)
+    assert isinstance(playlist, PlaylistReference)
+    # Test add_items
+    count = adapter.add_items("playlist_id", ["uri1"], cancel=cancel)
+    assert isinstance(count, int)
+    # Test replace_items
+    count2 = adapter.replace_items("playlist_id", ["uri1"], cancel=cancel)
+    assert isinstance(count2, int)
+    # Test read_items
+    items = adapter.read_items("playlist_id", cancel=cancel)
+    assert isinstance(items, list)
+    # Test user_playlists
+    playlists = adapter.user_playlists(cancel=cancel)
+    assert isinstance(playlists, list)
 
 
 class TestChunkUris:
