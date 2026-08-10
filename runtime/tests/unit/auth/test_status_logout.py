@@ -29,15 +29,13 @@ class TestProbeSpotifyIdentity:
             "external_urls": {"spotify": "https://open.spotify.com/user/test-user-id-123"},
         }
 
-        result = probe_spotify_identity(mock_client)
+        result = probe_spotify_identity(mock_client, "test-profile")
 
         assert isinstance(result, AccountProfile)
-        assert result.provider == "spotify"
-        assert result.account_id == "test-user-id-123"
+        assert result.profile_name == "test-profile"
+        assert result.service == "spotify"
+        assert result.provider_user_id == "test-user-id-123"
         assert result.display_name == "Test User"
-        assert result.email is None  # Email not stored in AccountProfile
-        assert result.username == "Test User"
-        assert result.profile_url == "https://open.spotify.com/user/test-user-id-123"
         mock_client.me.assert_called_once()
 
     def test_probe_spotify_identity_uses_display_name_fallback(self) -> None:
@@ -48,13 +46,12 @@ class TestProbeSpotifyIdentity:
             "display_name": None,
         }
 
-        result = probe_spotify_identity(mock_client)
+        result = probe_spotify_identity(mock_client, "test-profile")
 
-        assert result.provider == "spotify"
-        assert result.account_id == "test-user-id-456"
+        assert result.profile_name == "test-profile"
+        assert result.service == "spotify"
+        assert result.provider_user_id == "test-user-id-456"
         assert result.display_name == "test-user-id-456"
-        assert result.username is None
-        assert result.profile_url is None
 
     def test_probe_spotify_identity_missing_id_raises_error(self) -> None:
         """Test that missing 'id' field raises InvalidProviderResponse."""
@@ -64,7 +61,7 @@ class TestProbeSpotifyIdentity:
         }
 
         with pytest.raises(InvalidProviderResponse) as exc_info:
-            probe_spotify_identity(mock_client)
+            probe_spotify_identity(mock_client, "test-profile")
 
         assert "Spotify user profile missing 'id' field" in str(exc_info.value)
         assert exc_info.value.service == "spotify"
@@ -76,7 +73,7 @@ class TestProbeSpotifyIdentity:
         mock_client.me.return_value = None
 
         with pytest.raises(InvalidProviderResponse) as exc_info:
-            probe_spotify_identity(mock_client)
+            probe_spotify_identity(mock_client, "test-profile")
 
         assert "Spotify returned empty user profile" in str(exc_info.value)
         assert exc_info.value.service == "spotify"
@@ -92,7 +89,7 @@ class TestProbeSpotifyIdentity:
         # Mock SpotifyOauthError to trigger the access_denied branch
         with patch("playlist_bridge.auth.spotify.SpotifyOauthError", Exception):
             with pytest.raises(PermissionDenied) as exc_info:
-                probe_spotify_identity(mock_client)
+                probe_spotify_identity(mock_client, "test-profile")
 
             assert exc_info.value.service == "spotify"
             assert exc_info.value.operation == "probe_identity"
@@ -104,7 +101,7 @@ class TestProbeSpotifyIdentity:
 
         with patch("playlist_bridge.auth.spotify.SpotifyOauthError", Exception):
             with pytest.raises(RateLimited) as exc_info:
-                probe_spotify_identity(mock_client)
+                probe_spotify_identity(mock_client, "test-profile")
 
             assert exc_info.value.service == "spotify"
             assert exc_info.value.operation == "probe_identity"
@@ -118,7 +115,7 @@ class TestProbeSpotifyIdentity:
 
         with patch("playlist_bridge.auth.spotify.SpotifyOauthError", Exception):
             with pytest.raises(AuthenticationRequired) as exc_info:
-                probe_spotify_identity(mock_client)
+                probe_spotify_identity(mock_client, "test-profile")
 
             assert exc_info.value.service == "spotify"
             assert exc_info.value.operation == "probe_identity"
@@ -129,7 +126,7 @@ class TestProbeSpotifyIdentity:
         mock_client.me.side_effect = RuntimeError("Network timeout")
 
         with pytest.raises(TemporaryProviderFailure) as exc_info:
-            probe_spotify_identity(mock_client)
+            probe_spotify_identity(mock_client, "test-profile")
 
         assert exc_info.value.service == "spotify"
         assert exc_info.value.operation == "probe_identity"
@@ -142,11 +139,10 @@ class TestProbeSpotifyIdentity:
             "id": "test-user-id-789",
         }
 
-        result = probe_spotify_identity(mock_client)
+        result = probe_spotify_identity(mock_client, "test-profile")
 
-        assert result.account_id == "test-user-id-789"
+        assert result.provider_user_id == "test-user-id-789"
         assert result.display_name == "test-user-id-789"
-        assert result.username is None
 
     def test_probe_spotify_identity_handles_missing_external_urls(self) -> None:
         """Test that missing external_urls does not raise an error."""
@@ -156,9 +152,11 @@ class TestProbeSpotifyIdentity:
             "display_name": "Test User",
         }
 
-        result = probe_spotify_identity(mock_client)
+        result = probe_spotify_identity(mock_client, "test-profile")
 
-        assert result.profile_url is None
+        assert result.provider_user_id == "test-user-id-101"
+        assert result.display_name == "Test User"
+        assert result.service == "spotify"
 
 
 class TestProbeYoutubeIdentity:
@@ -185,15 +183,13 @@ class TestProbeYoutubeIdentity:
             ]
         }
 
-        result = probe_youtube_identity(mock_client)
+        result = probe_youtube_identity(mock_client, "test-profile")
 
         assert isinstance(result, AccountProfile)
-        assert result.provider == "youtube"
-        assert result.account_id == "UC123456789"
+        assert result.profile_name == "test-profile"
+        assert result.service == "youtube"
+        assert result.provider_user_id == "UC123456789"
         assert result.display_name == "Test Channel"
-        assert result.email is None
-        assert result.username == "@testchannel"
-        assert result.profile_url == "https://www.youtube.com/channel/UC123456789"
 
         mock_client.channels.assert_called_once()
         mock_channels.list.assert_called_once_with(part="snippet", mine=True)
@@ -219,13 +215,12 @@ class TestProbeYoutubeIdentity:
             ]
         }
 
-        result = probe_youtube_identity(mock_client)
+        result = probe_youtube_identity(mock_client, "test-profile")
 
-        assert result.provider == "youtube"
-        assert result.account_id == "UC987654321"
+        assert result.profile_name == "test-profile"
+        assert result.service == "youtube"
+        assert result.provider_user_id == "UC987654321"
         assert result.display_name == "UC987654321"
-        assert result.username is None
-        assert result.profile_url == "https://www.youtube.com/channel/UC987654321"
 
     def test_probe_youtube_identity_missing_id_raises_error(self) -> None:
         """Test that missing 'id' field raises InvalidProviderResponse."""
@@ -248,7 +243,7 @@ class TestProbeYoutubeIdentity:
         }
 
         with pytest.raises(InvalidProviderResponse) as exc_info:
-            probe_youtube_identity(mock_client)
+            probe_youtube_identity(mock_client, "test-profile")
 
         assert "YouTube channel missing 'id' field" in str(exc_info.value)
         assert exc_info.value.service == "youtube"
@@ -266,7 +261,7 @@ class TestProbeYoutubeIdentity:
         mock_list.execute.return_value = None
 
         with pytest.raises(InvalidProviderResponse) as exc_info:
-            probe_youtube_identity(mock_client)
+            probe_youtube_identity(mock_client, "test-profile")
 
         assert "YouTube returned empty or invalid response" in str(exc_info.value)
         assert exc_info.value.service == "youtube"
@@ -284,7 +279,7 @@ class TestProbeYoutubeIdentity:
         mock_list.execute.return_value = {"items": []}
 
         with pytest.raises(InvalidProviderResponse) as exc_info:
-            probe_youtube_identity(mock_client)
+            probe_youtube_identity(mock_client, "test-profile")
 
         assert "YouTube returned no channel data for authenticated user" in str(exc_info.value)
         assert exc_info.value.service == "youtube"
@@ -308,7 +303,7 @@ class TestProbeYoutubeIdentity:
             mock_list.execute.side_effect = MockHttpError()
 
             with pytest.raises(AuthenticationRequired) as exc_info:
-                probe_youtube_identity(mock_client)
+                probe_youtube_identity(mock_client, "test-profile")
 
             assert exc_info.value.service == "youtube"
             assert exc_info.value.operation == "probe_identity"
@@ -336,7 +331,7 @@ class TestProbeYoutubeIdentity:
             mock_list.execute.side_effect = MockHttpError()
 
             with pytest.raises(RateLimited) as exc_info:
-                probe_youtube_identity(mock_client)
+                probe_youtube_identity(mock_client, "test-profile")
 
             assert exc_info.value.service == "youtube"
             assert exc_info.value.operation == "probe_identity"
@@ -363,7 +358,7 @@ class TestProbeYoutubeIdentity:
             mock_list.execute.side_effect = MockHttpError()
 
             with pytest.raises(PermissionDenied) as exc_info:
-                probe_youtube_identity(mock_client)
+                probe_youtube_identity(mock_client, "test-profile")
 
             assert exc_info.value.service == "youtube"
             assert exc_info.value.operation == "probe_identity"
@@ -387,7 +382,7 @@ class TestProbeYoutubeIdentity:
             mock_list.execute.side_effect = MockHttpError()
 
             with pytest.raises(InvalidProviderResponse) as exc_info:
-                probe_youtube_identity(mock_client)
+                probe_youtube_identity(mock_client, "test-profile")
 
             assert exc_info.value.service == "youtube"
             assert exc_info.value.operation == "probe_identity"
@@ -406,7 +401,7 @@ class TestProbeYoutubeIdentity:
         # The RuntimeError will be caught by the final except block
         # and raised as TemporaryProviderFailure
         with pytest.raises(TemporaryProviderFailure) as exc_info:
-            probe_youtube_identity(mock_client)
+            probe_youtube_identity(mock_client, "test-profile")
 
         assert exc_info.value.service == "youtube"
         assert exc_info.value.operation == "probe_identity"

@@ -172,11 +172,12 @@ def authenticate_spotify_profile(
             ) from e
 
 
-def probe_spotify_identity(client: Spotify) -> AccountProfile:
+def probe_spotify_identity(client: Spotify, profile_name: str) -> AccountProfile:
     """Probe the identity of the authenticated Spotify user.
 
     Args:
         client: An authenticated Spotify client instance.
+        profile_name: The name of the profile being probed.
 
     Returns:
         AccountProfile: The account profile containing provider user ID and display name.
@@ -212,12 +213,10 @@ def probe_spotify_identity(client: Spotify) -> AccountProfile:
 
         # Return the account profile
         return AccountProfile(
-            provider="spotify",
-            account_id=account_id,
+            profile_name=profile_name,
+            service="spotify",
+            provider_user_id=account_id,
             display_name=display_name,
-            email=None,
-            username=user_info.get("display_name"),
-            profile_url=user_info.get("external_urls", {}).get("spotify"),
         )
 
     except SpotifyOauthError as e:
@@ -258,11 +257,12 @@ def probe_spotify_identity(client: Spotify) -> AccountProfile:
         ) from e
 
 
-def probe_spotify_identity(client: Spotify) -> AccountProfile:
+def probe_spotify_identity(client: Spotify, profile_name: str) -> AccountProfile:
     """Probe the identity of the authenticated Spotify user.
 
     Args:
         client: An authenticated Spotify client instance.
+        profile_name: The name of the profile being probed.
 
     Returns:
         AccountProfile: The account profile containing provider user ID and display name.
@@ -298,12 +298,10 @@ def probe_spotify_identity(client: Spotify) -> AccountProfile:
 
         # Return the account profile
         return AccountProfile(
-            provider="spotify",
-            account_id=account_id,
+            profile_name=profile_name,
+            service="spotify",
+            provider_user_id=account_id,
             display_name=display_name,
-            email=None,
-            username=user_info.get("display_name"),
-            profile_url=user_info.get("external_urls", {}).get("spotify"),
         )
 
     except SpotifyOauthError as e:
@@ -347,11 +345,12 @@ def probe_spotify_identity(client: Spotify) -> AccountProfile:
         ) from e
 
 
-def probe_spotify_identity(client: Spotify) -> AccountProfile:
+def probe_spotify_identity(client: Spotify, profile_name: str) -> AccountProfile:
     """Probe the identity of the authenticated Spotify user.
 
     Args:
         client: An authenticated Spotify client instance.
+        profile_name: The name of the profile being probed.
 
     Returns:
         AccountProfile: The account profile containing provider user ID and display name.
@@ -387,12 +386,10 @@ def probe_spotify_identity(client: Spotify) -> AccountProfile:
 
         # Return the account profile
         return AccountProfile(
-            provider="spotify",
-            account_id=account_id,
+            profile_name=profile_name,
+            service="spotify",
+            provider_user_id=account_id,
             display_name=display_name,
-            email=None,
-            username=user_info.get("display_name"),
-            profile_url=user_info.get("external_urls", {}).get("spotify"),
         )
 
     except SpotifyOauthError as e:

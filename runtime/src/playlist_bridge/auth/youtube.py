@@ -344,140 +344,6 @@ def refresh_google_credentials(
         return stored_creds
 
 
-def probe_youtube_identity(client) -> AccountProfile:
-    """Probe the identity of the authenticated YouTube user.
-
-    Args:
-        client: YouTube Data API client (googleapiclient discovery resource).
-
-    Returns:
-        AccountProfile: The account profile containing provider user ID and display name.
-
-    Raises:
-        AuthenticationRequired: If the client is not authenticated.
-        PermissionDenied: If the authenticated user lacks permission to access their profile.
-        RateLimited: If the YouTube API rate limit is exceeded.
-        InvalidProviderResponse: If YouTube returns an invalid or malformed response.
-        TemporaryProviderFailure: If the YouTube API is temporarily unavailable.
-    """
-    try:
-        # Get the authenticated user's channel/profile
-        # The "channels" endpoint with "mine=true" returns the authenticated user's channel
-        request = client.channels().list(part="snippet", mine=True)
-        response = request.execute()
-
-        # Check if we got a valid response with items
-        if not response or not isinstance(response, dict):
-            raise InvalidProviderResponse(
-                service="youtube",
-                operation="probe_identity",
-                safe_message="YouTube returned empty or invalid response",
-            )
-
-        items = response.get("items", [])
-        if not items or len(items) == 0:
-            raise InvalidProviderResponse(
-                service="youtube",
-                operation="probe_identity",
-                safe_message="YouTube returned no channel data for authenticated user",
-            )
-
-        # Extract channel information from the first item
-        channel = items[0]
-        channel_id = channel.get("id")
-        snippet = channel.get("snippet", {})
-        display_name = snippet.get("title")
-
-        if not channel_id:
-            raise InvalidProviderResponse(
-                service="youtube",
-                operation="probe_identity",
-                safe_message="YouTube channel missing 'id' field",
-            )
-
-        if not display_name:
-            # Fallback to channel ID if display name is missing
-            display_name = channel_id
-
-        # Return the account profile
-        # YouTube doesn't have a profile URL in the same way as Spotify,
-        # but we can construct the channel URL
-        profile_url = f"https://www.youtube.com/channel/{channel_id}"
-
-        return AccountProfile(
-            provider="youtube",
-            account_id=channel_id,
-            display_name=display_name,
-            email=None,
-            username=snippet.get("customUrl"),
-            profile_url=profile_url,
-        )
-
-    except Exception as e:
-        # Import HttpError locally to handle Google API errors
-        try:
-            from googleapiclient.errors import HttpError
-        except ImportError:
-            # If googleapiclient isn't available, re-raise as TemporaryProviderFailure
-            raise TemporaryProviderFailure(
-                service="youtube",
-                operation="probe_identity",
-                safe_message=f"YouTube API temporarily unavailable: {type(e).__name__}",
-            ) from e
-
-        # Handle specific HttpError cases
-        if isinstance(e, HttpError):
-            error_msg = str(e).lower()
-            status_code = getattr(e, "resp", None)
-            if status_code is not None:
-                status_code = getattr(status_code, "status", None)
-
-            # Check for authentication/permission errors
-            if status_code == 401:
-                raise AuthenticationRequired(
-                    service="youtube",
-                    operation="probe_identity",
-                    safe_message="YouTube authentication required",
-                ) from e
-            elif status_code == 403:
-                # Check if it's a permission denied or rate limit
-                if "rate limit" in error_msg or "quota" in error_msg:
-                    raise RateLimited(
-                        service="youtube",
-                        operation="probe_identity",
-                        safe_message="YouTube API rate limit exceeded",
-                    ) from e
-                else:
-                    raise PermissionDenied(
-                        service="youtube",
-                        operation="probe_identity",
-                        safe_message="User lacks permission to access YouTube profile",
-                    ) from e
-            elif status_code == 404:
-                raise InvalidProviderResponse(
-                    service="youtube",
-                    operation="probe_identity",
-                    safe_message="YouTube channel not found",
-                ) from e
-            else:
-                # Treat other HTTP errors as temporary failures
-                raise TemporaryProviderFailure(
-                    service="youtube",
-                    operation="probe_identity",
-                    safe_message=f"YouTube API returned error: {status_code}",
-                ) from e
-
-        # Re-raise known error types
-        if isinstance(e, (AuthenticationRequired, PermissionDenied, RateLimited, InvalidProviderResponse, TemporaryProviderFailure)):
-            raise
-
-        # Handle other exceptions
-        raise TemporaryProviderFailure(
-            service="youtube",
-            operation="probe_identity",
-            safe_message=f"YouTube API temporarily unavailable: {type(e).__name__}",
-        ) from e
-
     # Attempt to refresh the credentials
     try:
         stored_creds.refresh(request)
@@ -524,11 +390,12 @@ def probe_youtube_identity(client) -> AccountProfile:
     return stored_creds
 
 
-def probe_youtube_identity(client) -> AccountProfile:
+def probe_youtube_identity(client, profile_name: str) -> AccountProfile:
     """Probe the identity of the authenticated YouTube user.
 
     Args:
         client: YouTube Data API client (googleapiclient discovery resource).
+        profile_name: The name of the profile being probed.
 
     Returns:
         AccountProfile: The account profile containing provider user ID and display name.
@@ -585,12 +452,10 @@ def probe_youtube_identity(client) -> AccountProfile:
         profile_url = f"https://www.youtube.com/channel/{channel_id}"
 
         return AccountProfile(
-            provider="youtube",
-            account_id=channel_id,
+            profile_name=profile_name,
+            service="youtube",
+            provider_user_id=channel_id,
             display_name=display_name,
-            email=None,
-            username=snippet.get("customUrl"),
-            profile_url=profile_url,
         )
 
     except Exception as e:
