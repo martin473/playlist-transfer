@@ -7,17 +7,12 @@ and re-exports the cancellation token protocol for checking cancellation request
 from typing import Callable, TypeAlias
 
 from playlist_bridge.domain.events import JobEvent
-from playlist_bridge.providers.youtube import CancellationToken
-from playlist_bridge.providers.errors import CancellationRequested
 
 # Type alias for a synchronous event emitter callback
 # Accepts any discriminated JobEvent union member and returns None.
 # This is a read-only interface: the emitter does not log, serialize,
 # or persist events — it only delivers them to the registered handler.
 EventEmitter: TypeAlias = Callable[[JobEvent], None]
-
-# Re-export CancellationToken for job orchestration consumers
-__all__ = ["EventEmitter", "CancellationToken", "FakeCancellationToken", "ActiveToken", "CancelledToken"]
 
 
 class FakeCancellationToken:
@@ -38,6 +33,7 @@ class FakeCancellationToken:
     def raise_if_cancelled(self) -> None:
         """Raise CancellationRequested if the token is cancelled."""
         if self._cancelled:
+            from playlist_bridge.providers.errors import CancellationRequested
             raise CancellationRequested("test", "cancel_check", "Operation cancelled.")
 
 
@@ -63,3 +59,14 @@ class CancelledToken(FakeCancellationToken):
     def __init__(self) -> None:
         """Initialize a cancelled token."""
         super().__init__(cancelled=True)
+
+
+def __getattr__(name: str):
+    """Lazy import of CancellationToken from providers.youtube to avoid circular imports."""
+    if name == "CancellationToken":
+        from playlist_bridge.providers.youtube import CancellationToken
+        return CancellationToken
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ["EventEmitter", "CancellationToken", "FakeCancellationToken", "ActiveToken", "CancelledToken"]
