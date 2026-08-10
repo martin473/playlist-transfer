@@ -106,11 +106,12 @@ def calculate_transfer_counts(
     tracks: Sequence[SourceTrack],
     decisions: Sequence[MatchDecision],
 ) -> TransferCounts:
-    """Calculate counts of matched, ambiguous, unmatched, unavailable, skipped, and non-track items.
+    """Calculate counts of matched, unmatched, unavailable, and skipped items.
 
-    This function counts source tracks by their decision type and availability status,
-    returning a TransferCounts tuple. Matched tracks are those with accepted decisions.
-    Non-track items are those with decision_type "non_track".
+    This function counts source tracks by their match status and availability status,
+    returning a TransferCounts tuple. Matched tracks are those with status "matched"
+    and a selected_candidate. Unmatched tracks are those with status "unmatched" or
+    no decision. Unavailable tracks are counted separately regardless of decisions.
 
     Args:
         tracks: Sequence of SourceTrack objects in source playlist order.
@@ -123,6 +124,7 @@ def calculate_transfer_counts(
         ValueError: If tracks or decisions are invalid.
 
     Examples:
+        >>> from playlist_bridge.domain.models import MatchScore, SpotifyCandidate, SourceTrack, MatchDecision
         >>> track1 = SourceTrack(
         ...     position=0,
         ...     title="Song 1",
@@ -131,15 +133,31 @@ def calculate_transfer_counts(
         ...     video_id="abc123",
         ...     availability="available",
         ... )
+        >>> candidate1 = SpotifyCandidate(
+        ...     track_id="xyz789",
+        ...     uri="spotify:track:xyz789",
+        ...     title="Song 1",
+        ...     artist_names=["Artist 1"],
+        ...     album="Album 1",
+        ...     duration_seconds=180,
+        ...     explicit=False,
+        ... )
+        >>> score1 = MatchScore(
+        ...     title_similarity=0.95,
+        ...     artist_similarity=0.9,
+        ...     duration_similarity=1.0,
+        ...     version_agreement=1.0,
+        ...     unwanted_version_penalty=0.0,
+        ...     explicit_state=1.0,
+        ...     total_score=0.95,
+        ...     reasons=["Good match"],
+        ... )
         >>> decision1 = MatchDecision(
         ...     source_item_id="abc123",
-        ...     destination_uri="spotify:track:xyz789",
-        ...     destination_track_id="xyz789",
-        ...     destination_title="Song 1",
-        ...     destination_artist_names=["Artist 1"],
-        ...     score=0.95,
-        ...     decision_type="accepted",
-        ...     confidence=0.9,
+        ...     status="matched",
+        ...     selected_candidate=candidate1,
+        ...     score=score1,
+        ...     reason="Good match",
         ... )
         >>> counts = calculate_transfer_counts([track1], [decision1])
         >>> counts.matched
@@ -179,22 +197,19 @@ def calculate_transfer_counts(
             unmatched += 1
             continue
 
-        decision_type = decision.decision_type.lower()
-
-        if decision_type == "accepted":
+        # Use status and selected_candidate to determine the outcome
+        # For "matched" status with selected_candidate, count as matched
+        if decision.status == "matched" and decision.selected_candidate is not None:
             matched += 1
-        elif decision_type == "ambiguous":
-            ambiguous += 1
-        elif decision_type == "skipped":
-            skipped += 1
-        elif decision_type == "non_track":
-            non_track += 1
-        elif decision_type in ("unmatched", "review", "rejected"):
-            # review and rejected are counted as unmatched for transfer purposes
+        elif decision.status == "unmatched":
+            # If status is explicitly unmatched, count as unmatched
             unmatched += 1
         else:
-            # Unknown decision type - count as unmatched
-            unmatched += 1
+            # Fallback: if status is unknown, check if there's a selected_candidate
+            if decision.selected_candidate is not None:
+                matched += 1
+            else:
+                unmatched += 1
 
     return TransferCounts(
         matched=matched,
