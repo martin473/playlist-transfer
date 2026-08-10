@@ -795,6 +795,34 @@ def get_profile(session: Session, service: str, profile_name: str) -> AccountPro
     return profile
 
 
+def list_recent_jobs(session: Session, limit: int = 20) -> list[JobRecord]:
+    """Return recent jobs in deterministic recency order.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        limit: Maximum number of jobs to return. Defaults to 20.
+
+    Returns:
+        A list of JobRecord objects ordered by created_at descending,
+        then by id descending for deterministic ordering.
+
+    Raises:
+        ValueError: If limit is less than 1.
+
+    Side Effects:
+        read-only: This function does not modify the database.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+
+    records = session.query(JobRecord).order_by(
+        JobRecord.created_at.desc(),
+        JobRecord.id.desc(),
+    ).limit(limit).all()
+
+    return records
+
+
 def resolve_correction_then_cache(session: Session, fingerprint: str) -> ManualCorrection | MatchCacheEntry | None:
     """Resolve a fingerprint by checking manual correction before automatic cache.
 

@@ -21,6 +21,7 @@ from playlist_bridge.persistence.repositories import (
     get_job,
     get_source_tracks_ordered,
     get_unresolved_decisions,
+    list_recent_jobs,
     lookup_match_cache,
     lookup_manual_correction,
     record_job_error,
@@ -2294,3 +2295,114 @@ class TestRecordJobError:
         reloaded = get_job(in_memory_session, job_id)
         assert reloaded is not None
         assert reloaded.last_error == "[SPOTIFY_RATE_LIMIT] Rate limit exceeded"
+
+
+class TestListRecentJobs:
+    """Tests for list_recent_jobs function."""
+
+    def test_list_recent_jobs_returns_in_recency_order(self, in_memory_session: Session):
+        """list_recent_jobs returns jobs ordered by created_at descending."""
+        # Create multiple jobs with different timestamps
+        job1_id = str(uuid.uuid4())
+        job2_id = str(uuid.uuid4())
+        job3_id = str(uuid.uuid4())
+
+        created_at1 = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        created_at2 = datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc)
+        created_at3 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+
+        # Create jobs in non-chronological order to test ordering
+        create_job(in_memory_session, request, job2_id, created_at2)
+        create_job(in_memory_session, request, job1_id, created_at1)
+        create_job(in_memory_session, request, job3_id, created_at3)
+
+        # List recent jobs with default limit
+        results = list_recent_jobs(in_memory_session)
+
+        # Should be ordered by created_at descending
+        assert len(results) == 3
+        assert results[0].id == job3_id
+        assert results[0].created_at == created_at3
+        assert results[1].id == job2_id
+        assert results[1].created_at == created_at2
+        assert results[2].id == job1_id
+        assert results[2].created_at == created_at1
+
+    def test_list_recent_jobs_respects_limit(self, in_memory_session: Session):
+        """list_recent_jobs returns at most the specified number of jobs."""
+        # Create 5 jobs
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+
+        job_ids = []
+        for i in range(5):
+            job_id = str(uuid.uuid4())
+            created_at = datetime(2024, 1, 1, 10, i, 0, tzinfo=timezone.utc)
+            create_job(in_memory_session, request, job_id, created_at)
+            job_ids.append(job_id)
+
+        # List with limit 3
+        results = list_recent_jobs(in_memory_session, limit=3)
+
+        assert len(results) == 3
+        # Should be the 3 most recent (largest timestamps)
+        # The IDs created with larger i have larger timestamps
+        assert results[0].id == job_ids[4]
+        assert results[1].id == job_ids[3]
+        assert results[2].id == job_ids[2]
+
+    def test_list_recent_jobs_returns_empty_for_no_jobs(self, in_memory_session: Session):
+        """list_recent_jobs returns empty list when no jobs exist."""
+        results = list_recent_jobs(in_memory_session)
+        assert results == []
+
+    def test_list_recent_jobs_raises_value_error_for_invalid_limit(self, in_memory_session: Session):
+        """list_recent_jobs raises ValueError when limit is less than 1."""
+        with pytest.raises(ValueError) as exc_info:
+            list_recent_jobs(in_memory_session, limit=0)
+        assert "limit must be at least 1" in str(exc_info.value)
+
+    def test_list_recent_jobs_uses_id_as_tie_breaker(self, in_memory_session: Session):
+        """list_recent_jobs uses id descending as tie-breaker for identical timestamps."""
+        # Create two jobs with the exact same created_at
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+
+        same_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        job1_id = str(uuid.uuid4())
+        job2_id = str(uuid.uuid4())
+
+        # Ensure job2_id is lexicographically greater than job1_id
+        if job1_id > job2_id:
+            job1_id, job2_id = job2_id, job1_id
+
+        create_job(in_memory_session, request, job1_id, same_time)
+        create_job(in_memory_session, request, job2_id, same_time)
+
+        results = list_recent_jobs(in_memory_session)
+
+        # Should be ordered by id descending for ties
+        assert len(results) == 2
+        assert results[0].id > results[1].id
+        assert results[0].created_at == results[1].created_at
