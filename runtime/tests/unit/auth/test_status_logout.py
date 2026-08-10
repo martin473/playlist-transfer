@@ -861,3 +861,462 @@ class TestProbeSpotifyAuthStatus:
 
                 assert result.state == "invalid"
                 assert "Unexpected network error" in result.safe_message
+
+
+class TestProbeYoutubeAuthStatus:
+    """Tests for probe_youtube_auth_status function."""
+
+    def test_probe_youtube_auth_status_missing_credentials(self) -> None:
+        """Test that missing credentials returns 'missing' status."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = None
+
+        result = probe_youtube_auth_status(
+            profile_name="test-profile",
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        assert isinstance(result, AuthStatus)
+        assert result.service == SourceService.YOUTUBE
+        assert result.profile_name == "test-profile"
+        assert result.state == "missing"
+        assert result.safe_message == "No YouTube credentials found for this profile"
+        assert result.provider_user_id is None
+        assert result.display_name is None
+
+    def test_probe_youtube_auth_status_authenticated(self) -> None:
+        """Test that valid credentials return 'authenticated' status."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        # Provide properly structured credentials with a "token" field
+        mock_credentials.load.return_value = {
+            "token": "valid-token",
+            "refresh_token": "refresh-token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "valid-token"
+            mock_creds.refresh_token = "refresh-token"
+            mock_creds.valid = True
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                mock_profile = MagicMock()
+                mock_profile.account_id = "channel-123"
+                mock_profile.display_name = "Test Channel"
+                mock_probe.return_value = mock_profile
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert isinstance(result, AuthStatus)
+                    assert result.service == SourceService.YOUTUBE
+                    assert result.profile_name == "test-profile"
+                    assert result.state == "authenticated"
+                    assert result.provider_user_id == "channel-123"
+                    assert result.display_name == "Test Channel"
+                    assert result.safe_message == "YouTube authentication successful"
+
+    def test_probe_youtube_auth_status_expired_refreshable(self) -> None:
+        """Test that expired token with refresh returns 'expired_refreshable' status."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from playlist_bridge.providers.errors import AuthenticationRequired
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "token": "expired-token",
+            "refresh_token": "refresh-token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "expired-token"
+            mock_creds.refresh_token = "refresh-token"
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                mock_probe.side_effect = AuthenticationRequired(
+                    service="youtube",
+                    operation="probe_identity",
+                    safe_message="Token expired",
+                )
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert result.state == "expired_refreshable"
+                    assert "Token expired" in result.safe_message
+
+    def test_probe_youtube_auth_status_expired_no_refresh_returns_invalid(self) -> None:
+        """Test that expired token without refresh returns 'invalid' status."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from playlist_bridge.providers.errors import AuthenticationRequired
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "token": "expired-token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "expired-token"
+            mock_creds.refresh_token = None
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                mock_probe.side_effect = AuthenticationRequired(
+                    service="youtube",
+                    operation="probe_identity",
+                    safe_message="Token expired, no refresh",
+                )
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert result.state == "invalid"
+                    assert "Token expired, no refresh" in result.safe_message
+
+    def test_probe_youtube_auth_status_invalid_credentials_returns_invalid(self) -> None:
+        """Test that invalid credentials return 'invalid' status."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from playlist_bridge.providers.errors import PermissionDenied
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "token": "invalid-token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "invalid-token"
+            mock_creds.refresh_token = None
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                mock_probe.side_effect = PermissionDenied(
+                    service="youtube",
+                    operation="probe_identity",
+                    safe_message="Access denied",
+                )
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert result.state == "invalid"
+                    assert "Access denied" in result.safe_message
+
+    def test_probe_youtube_auth_status_rate_limited_with_refresh(self) -> None:
+        """Test that RateLimited with refresh token returns 'expired_refreshable'."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from playlist_bridge.providers.errors import RateLimited
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "token": "token",
+            "refresh_token": "refresh-token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "token"
+            mock_creds.refresh_token = "refresh-token"
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                mock_probe.side_effect = RateLimited(
+                    service="youtube",
+                    operation="probe_identity",
+                    safe_message="Rate limit exceeded",
+                )
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert result.state == "expired_refreshable"
+                    assert "Rate limit exceeded" in result.safe_message
+
+    def test_probe_youtube_auth_status_unexpected_error_returns_invalid(self) -> None:
+        """Test that unexpected errors return 'invalid' status."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "token": "token",
+            "refresh_token": "refresh-token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "token"
+            mock_creds.refresh_token = "refresh-token"
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                mock_probe.side_effect = RuntimeError("Unexpected network error")
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert result.state == "invalid"
+                    assert "Unexpected network error" in result.safe_message
+
+    def test_probe_youtube_auth_status_credential_corruption_propagates(self) -> None:
+        """Test that CredentialCorruptionError is re-raised."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status
+        from playlist_bridge.ports import CredentialCorruptionError
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.side_effect = CredentialCorruptionError(
+            service="youtube",
+            profile_name="test-profile",
+            safe_message="Corrupted credentials",
+        )
+
+        with pytest.raises(CredentialCorruptionError) as exc_info:
+            probe_youtube_auth_status(
+                profile_name="test-profile",
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+        assert exc_info.value.service == "youtube"
+        assert exc_info.value.profile_name == "test-profile"
+
+    def test_probe_youtube_auth_status_http_401_with_refresh_returns_expired_refreshable(self) -> None:
+        """Test that HTTP 401 with refresh token returns 'expired_refreshable'."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "token": "token",
+            "refresh_token": "refresh-token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "token"
+            mock_creds.refresh_token = "refresh-token"
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                # Simulate an HttpError with status 401
+                class MockHttpError(Exception):
+                    def __init__(self) -> None:
+                        self.resp = MagicMock()
+                        self.resp.status = 401
+
+                mock_probe.side_effect = MockHttpError()
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert result.state == "expired_refreshable"
+                    assert "YouTube token expired but refresh available" in result.safe_message
+
+    def test_probe_youtube_auth_status_http_401_no_refresh_returns_invalid(self) -> None:
+        """Test that HTTP 401 without refresh token returns 'invalid'."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "token": "token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "token"
+            mock_creds.refresh_token = None
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                class MockHttpError(Exception):
+                    def __init__(self) -> None:
+                        self.resp = MagicMock()
+                        self.resp.status = 401
+
+                mock_probe.side_effect = MockHttpError()
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert result.state == "invalid"
+                    assert "YouTube authentication required" in result.safe_message
+
+    def test_probe_youtube_auth_status_http_403_rate_limit_with_refresh(self) -> None:
+        """Test that HTTP 403 rate limit with refresh returns 'expired_refreshable'."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "token": "token",
+            "refresh_token": "refresh-token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "token"
+            mock_creds.refresh_token = "refresh-token"
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                class MockHttpError(Exception):
+                    def __init__(self) -> None:
+                        self.resp = MagicMock()
+                        self.resp.status = 403
+
+                mock_probe.side_effect = MockHttpError()
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert result.state == "expired_refreshable"
+                    assert "YouTube API error: 403" in result.safe_message
+
+    def test_probe_youtube_auth_status_http_403_no_refresh_returns_invalid(self) -> None:
+        """Test that HTTP 403 without refresh token returns 'invalid'."""
+        from playlist_bridge.auth.status import probe_youtube_auth_status, AuthStatus
+        from playlist_bridge.domain.enums import SourceService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "token": "token",
+        }
+
+        # Mock deserialize_google_credentials to avoid real validation
+        with patch("playlist_bridge.auth.youtube.deserialize_google_credentials") as mock_deserialize:
+            mock_creds = MagicMock()
+            mock_creds.token = "token"
+            mock_creds.refresh_token = None
+            mock_deserialize.return_value = mock_creds
+
+            with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+                class MockHttpError(Exception):
+                    def __init__(self) -> None:
+                        self.resp = MagicMock()
+                        self.resp.status = 403
+
+                mock_probe.side_effect = MockHttpError()
+
+                with patch("googleapiclient.discovery.build") as mock_build:
+                    mock_client = MagicMock()
+                    mock_build.return_value = mock_client
+
+                    result = probe_youtube_auth_status(
+                        profile_name="test-profile",
+                        profiles=mock_profiles,
+                        credentials=mock_credentials,
+                    )
+
+                    assert result.state == "invalid"
+                    assert "YouTube API error: 403" in result.safe_message
