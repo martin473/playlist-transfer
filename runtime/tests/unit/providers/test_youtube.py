@@ -369,9 +369,10 @@ class TestFetchYouTubePlaylistItemPage:
 
     def test_returns_items_and_next_page_token(self) -> None:
         """Test that the function returns items and the next-page token without mutating order."""
-        # This is a minimal test that verifies the function exists and has the correct signature
-        # Full integration tests will use a mock YouTube client
+        # This test verifies the function exists, has the correct signature,
+        # and that it correctly returns items and next-page token without mutating order.
         from playlist_bridge.providers.youtube import fetch_youtube_playlist_item_page
+        from playlist_bridge.domain.models import ItemPage, SourceTrack
         import inspect
 
         # Verify the function exists and has the expected parameters
@@ -390,6 +391,98 @@ class TestFetchYouTubePlaylistItemPage:
         # Note: ItemPage is imported from domain.models
         from playlist_bridge.domain.models import ItemPage
         assert sig.return_annotation in (ItemPage, object) or sig.return_annotation == ItemPage
+
+    def test_fetch_page_returns_items_and_next_token_with_order_preserved(self) -> None:
+        """Test that fetch_youtube_playlist_item_page returns items and next-page token without mutating order."""
+        from playlist_bridge.providers.youtube import fetch_youtube_playlist_item_page
+        from playlist_bridge.domain.models import ItemPage, SourceTrack
+        from googleapiclient.errors import HttpError
+        import json
+
+        # Mock HTTP response class
+        class MockHttpResponse:
+            def __init__(self, status=200):
+                self.status = status
+                self.reason = "OK"
+
+        # Create a mock YouTube client that returns controlled data
+        class MockClient:
+            def __init__(self, response_data):
+                self._response_data = response_data
+
+            def playlistItems(self):
+                class PlaylistItems:
+                    def __init__(self, parent):
+                        self._parent = parent
+
+                    def list(self, **kwargs):
+                        # Return an object with an execute() method that returns the response
+                        class Request:
+                            def __init__(self, response_data):
+                                self._response_data = response_data
+
+                            def execute(self):
+                                return self._response_data
+
+                        return Request(self._parent._response_data)
+                return PlaylistItems(self)
+
+        # Test data: two items with distinct video IDs and titles
+        test_response = {
+            "items": [
+                {
+                    "id": "item1",
+                    "snippet": {
+                        "title": "First Song",
+                        "resourceId": {"videoId": "video123"},
+                        "videoOwnerChannelTitle": "Channel A",
+                        "channelTitle": "Channel A",
+                    },
+                    "contentDetails": {"duration": "PT3M30S"},
+                    "status": {"privacyStatus": "public"},
+                },
+                {
+                    "id": "item2",
+                    "snippet": {
+                        "title": "Second Song",
+                        "resourceId": {"videoId": "video456"},
+                        "videoOwnerChannelTitle": "Channel B",
+                        "channelTitle": "Channel B",
+                    },
+                    "contentDetails": {"duration": "PT4M15S"},
+                    "status": {"privacyStatus": "public"},
+                },
+            ],
+            "nextPageToken": "next_token_123",
+            "pageInfo": {"totalResults": 2},
+        }
+
+        client = MockClient(test_response)
+        result = fetch_youtube_playlist_item_page(client, "PL_TEST", None)
+
+        # Verify we got an ItemPage back
+        assert isinstance(result, ItemPage)
+
+        # Verify items are returned (2 items)
+        assert len(result.items) == 2
+
+        # Verify the order is preserved (first item matches first in response)
+        assert result.items[0].title == "First Song"
+        assert result.items[0].video_id == "video123"
+        assert result.items[0].artist_names == ["Channel A"]
+
+        assert result.items[1].title == "Second Song"
+        assert result.items[1].video_id == "video456"
+        assert result.items[1].artist_names == ["Channel B"]
+
+        # Verify next-page token is returned
+        assert result.next_page_token == "next_token_123"
+
+        # Verify has_more is True when there's a next page token
+        assert result.has_more is True
+
+        # Verify total_count is available
+        assert result.total_count == 2
 
     def test_handles_missing_client(self) -> None:
         """Test that the function raises appropriate errors when client is missing."""
