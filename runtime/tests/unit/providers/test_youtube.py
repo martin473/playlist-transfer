@@ -10,6 +10,8 @@ from playlist_bridge.providers.youtube import (
     iter_youtube_playlist_items,
     chunk_video_ids,
     unique_video_ids,
+    fetch_youtube_video_metadata,
+    YouTubeVideoMetadata,
 )
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
@@ -1644,3 +1646,291 @@ class TestFakeSourceAdapter:
         # Verify the methods are callable with the expected arguments
         assert callable(fake.load_page)
         assert callable(fake.load_playlist)
+
+
+class TestMergeYouTubeVideoMetadataBatches:
+    """Tests for merge_youtube_video_metadata_batches function."""
+
+    def test_merge_single_batch(self) -> None:
+        """Test merging a single batch (less than chunk_size)."""
+        from playlist_bridge.providers.youtube import (
+            merge_youtube_video_metadata_batches,
+            YouTubeVideoMetadata,
+        )
+        from playlist_bridge.providers.errors import CancellationRequested
+
+        # Create a mock client
+        class MockClient:
+            def videos(self):
+                return self
+
+            def list(self, part, id):
+                return self
+
+            def execute(self):
+                return {
+                    "items": [
+                        {
+                            "id": "video1",
+                            "snippet": {
+                                "title": "Video 1",
+                                "channelId": "channel1",
+                                "channelTitle": "Channel One",
+                                "thumbnails": {
+                                    "default": {"url": "http://example.com/thumb1.jpg"}
+                                },
+                            },
+                            "contentDetails": {"duration": "PT3M45S"},
+                        },
+                        {
+                            "id": "video2",
+                            "snippet": {
+                                "title": "Video 2",
+                                "channelId": "channel2",
+                                "channelTitle": "Channel Two",
+                                "thumbnails": {},
+                            },
+                            "contentDetails": {"duration": "PT2M30S"},
+                        },
+                    ]
+                }
+
+        class MockCancel:
+            def raise_if_cancelled(self):
+                pass
+
+            def is_cancelled(self):
+                return False
+
+        client = MockClient()
+        cancel = MockCancel()
+        video_ids = ["video1", "video2"]
+
+        result = merge_youtube_video_metadata_batches(client, video_ids, cancel)
+
+        assert len(result) == 2
+        assert "video1" in result
+        assert "video2" in result
+        assert result["video1"].title == "Video 1"
+        assert result["video2"].title == "Video 2"
+
+    def test_merge_multiple_batches(self) -> None:
+        """Test merging multiple batches (more than chunk_size).
+
+        A fixture larger than one batch should produce one merged dictionary.
+        """
+        from playlist_bridge.providers.youtube import (
+            merge_youtube_video_metadata_batches,
+            YouTubeVideoMetadata,
+        )
+
+        # Create a mock client that returns different videos for different calls
+        class MockClient:
+            def __init__(self):
+                self.call_count = 0
+
+            def videos(self):
+                return self
+
+            def list(self, part, id):
+                self.part = part
+                self.video_ids = id.split(",")
+                return self
+
+            def execute(self):
+                self.call_count += 1
+                items = []
+                for vid in self.video_ids:
+                    items.append(
+                        {
+                            "id": vid,
+                            "snippet": {
+                                "title": f"Video {vid}",
+                                "channelId": f"channel_{vid}",
+                                "channelTitle": f"Channel {vid}",
+                                "thumbnails": {},
+                            },
+                            "contentDetails": {"duration": "PT1M00S"},
+                        }
+                    )
+                return {"items": items}
+
+        class MockCancel:
+            def raise_if_cancelled(self):
+                pass
+
+            def is_cancelled(self):
+                return False
+
+        client = MockClient()
+        cancel = MockCancel()
+        # Create 75 video IDs to trigger multiple batches (chunk_size=50)
+        video_ids = [f"video{i}" for i in range(75)]
+
+        result = merge_youtube_video_metadata_batches(client, video_ids, cancel, chunk_size=50)
+
+        # Should have merged all 75 videos
+        assert len(result) == 75
+        assert all(f"video{i}" in result for i in range(75))
+        # Should have called the API twice (50 + 25)
+        assert client.call_count == 2
+        # Verify the merged dictionary contains all IDs
+        assert set(result.keys()) == set(video_ids)
+
+    def test_merge_preserves_all_ids(self) -> None:
+        """Test that merging preserves all IDs without losing any."""
+        from playlist_bridge.providers.youtube import (
+            merge_youtube_video_metadata_batches,
+            YouTubeVideoMetadata,
+        )
+
+        # Create a mock client that returns all requested videos
+        class MockClient:
+            def videos(self):
+                return self
+
+            def list(self, part, id):
+                self.video_ids = id.split(",")
+                return self
+
+            def execute(self):
+                items = []
+                for vid in self.video_ids:
+                    items.append(
+                        {
+                            "id": vid,
+                            "snippet": {
+                                "title": f"Video {vid}",
+                                "channelId": f"channel_{vid}",
+                                "channelTitle": f"Channel {vid}",
+                                "thumbnails": {},
+                            },
+                            "contentDetails": {"duration": "PT1M00S"},
+                        }
+                    )
+                return {"items": items}
+
+        class MockCancel:
+            def raise_if_cancelled(self):
+                pass
+
+            def is_cancelled(self):
+                return False
+
+        client = MockClient()
+        cancel = MockCancel()
+        video_ids = [f"id{i}" for i in range(60)]  # 60 IDs = 2 batches
+
+        result = merge_youtube_video_metadata_batches(client, video_ids, cancel, chunk_size=40)
+
+        # All IDs should be present in the merged result
+        assert len(result) == 60
+        for video_id in video_ids:
+            assert video_id in result
+        # No IDs should be lost
+        assert set(result.keys()) == set(video_ids)
+
+    def test_merge_handles_empty_list(self) -> None:
+        """Test merging with an empty list of video IDs."""
+        from playlist_bridge.providers.youtube import (
+            merge_youtube_video_metadata_batches,
+        )
+
+        class MockClient:
+            def videos(self):
+                return self
+
+            def list(self, part, id):
+                return self
+
+            def execute(self):
+                return {"items": []}
+
+        class MockCancel:
+            def raise_if_cancelled(self):
+                pass
+
+            def is_cancelled(self):
+                return False
+
+        client = MockClient()
+        cancel = MockCancel()
+
+        result = merge_youtube_video_metadata_batches(client, [], cancel)
+
+        assert result == {}
+
+    def test_merge_cancellation_handling(self) -> None:
+        """Test that merge correctly handles cancellation requests."""
+        from playlist_bridge.providers.youtube import (
+            merge_youtube_video_metadata_batches,
+        )
+        from playlist_bridge.providers.errors import CancellationRequested
+
+        class MockClient:
+            def videos(self):
+                return self
+
+            def list(self, part, id):
+                return self
+
+            def execute(self):
+                return {"items": []}
+
+        class CancelAfterFirst:
+            def __init__(self):
+                self.count = 0
+
+            def raise_if_cancelled(self):
+                self.count += 1
+                if self.count > 1:
+                    raise CancellationRequested("youtube", "merge_youtube_video_metadata_batches")
+
+            def is_cancelled(self):
+                return self.count > 1
+
+        client = MockClient()
+        cancel = CancelAfterFirst()
+        video_ids = [f"id{i}" for i in range(60)]
+
+        with pytest.raises(CancellationRequested):
+            merge_youtube_video_metadata_batches(client, video_ids, cancel, chunk_size=30)
+
+    def test_merge_uses_correct_chunk_size(self) -> None:
+        """Test that merge uses the provided chunk_size correctly."""
+        from playlist_bridge.providers.youtube import (
+            merge_youtube_video_metadata_batches,
+        )
+
+        class MockClient:
+            def __init__(self):
+                self.call_count = 0
+                self.batch_sizes = []
+
+            def videos(self):
+                return self
+
+            def list(self, part, id):
+                self.call_count += 1
+                self.batch_sizes.append(len(id.split(",")))
+                return self
+
+            def execute(self):
+                return {"items": []}
+
+        class MockCancel:
+            def raise_if_cancelled(self):
+                pass
+
+            def is_cancelled(self):
+                return False
+
+        client = MockClient()
+        cancel = MockCancel()
+        video_ids = [f"id{i}" for i in range(100)]
+
+        merge_youtube_video_metadata_batches(client, video_ids, cancel, chunk_size=25)
+
+        # Should have 4 batches of 25
+        assert client.call_count == 4
+        assert client.batch_sizes == [25, 25, 25, 25]

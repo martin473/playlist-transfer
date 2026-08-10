@@ -1,6 +1,7 @@
 """YouTube provider utilities for parsing and handling YouTube data."""
 
-from typing import Iterator, Optional, Protocol
+from typing import Iterator, Optional, Protocol, Sequence, Dict, Any
+from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
 import isodate
@@ -21,6 +22,8 @@ from playlist_bridge.providers.errors import (
     RateLimited,
     InvalidProviderResponse,
     TemporaryProviderFailure,
+    CancellationRequested,
+    ProviderError,
 )
 
 
@@ -39,6 +42,31 @@ class CancellationToken(Protocol):
             CancellationRequested: If the operation has been cancelled.
         """
         ...
+
+
+@dataclass(frozen=True)
+class YouTubeVideoMetadata:
+    """Metadata for a YouTube video.
+
+    This model represents the metadata returned by the YouTube Data API
+    videos.list endpoint for a single video, including snippet and
+    contentDetails fields.
+
+    Attributes:
+        title: The video title.
+        channel_id: The ID of the channel that uploaded the video.
+        channel_title: The display name of the channel that uploaded the video.
+        duration_iso: The duration in ISO 8601 format (e.g., 'PT4M13S').
+        duration_ms: The duration in milliseconds, parsed from duration_iso.
+        thumbnail_url: Optional URL to a thumbnail image.
+    """
+
+    title: str
+    channel_id: str
+    channel_title: str
+    duration_iso: str
+    duration_ms: int
+    thumbnail_url: Optional[str] = None
 
 
 class SourceAdapter(Protocol):
@@ -735,6 +763,198 @@ def map_youtube_playlist_item(
         channel_title=channel_title if channel_title else None,
         availability=availability,
     )
+
+
+def fetch_youtube_video_metadata(
+    client: object,
+    video_ids: Sequence[str],
+    cancel: CancellationToken,
+) -> dict[str, YouTubeVideoMetadata]:
+    """Fetch video metadata from YouTube for a batch of video IDs.
+
+    This function calls the YouTube Data API videos.list endpoint for the
+    provided video IDs and returns a dictionary mapping video ID to
+    YouTubeVideoMetadata. The function processes at most 50 video IDs per
+    call (the YouTube API limit). Callers should chunk video IDs before
+    calling this function.
+
+    Args:
+        client: YouTube Data API client (googleapiclient discovery resource).
+        video_ids: Sequence of video IDs to fetch metadata for (max 50).
+        cancel: CancellationToken to check for cancellation requests.
+
+    Returns:
+        dict[str, YouTubeVideoMetadata]: Dictionary mapping video ID to
+        metadata for each video found. Videos that are not found or
+        unavailable are omitted from the result.
+
+    Raises:
+        AuthenticationRequired: If credentials are invalid or expired.
+        PermissionDenied: If the user lacks permission to access the videos.
+        RateLimited: If the YouTube API rate limit is exceeded.
+        InvalidProviderResponse: If the response is malformed or missing fields.
+        TemporaryProviderFailure: If the API is temporarily unavailable.
+        CancellationRequested: If the operation is cancelled via the token.
+    """
+    from googleapiclient.errors import HttpError
+    import isodate
+    from typing import Any
+
+    # Check for cancellation
+    if hasattr(cancel, "raise_if_cancelled"):
+        cancel.raise_if_cancelled()
+    elif hasattr(cancel, "is_cancelled") and cancel.is_cancelled():
+        raise CancellationRequested("youtube", "fetch_youtube_video_metadata")
+
+    # Ensure we have video IDs
+    if not video_ids:
+        return {}
+
+    # YouTube API limits videos.list to 50 video IDs per request
+    if len(video_ids) > 50:
+        # This is a safety check - callers should chunk before calling
+        raise ValueError(
+            f"Too many video IDs: {len(video_ids)}. Maximum is 50 per request."
+        )
+
+    try:
+        # Call the YouTube API videos-list endpoint
+        request = client.videos().list(  # type: ignore[attr-defined]
+            part="snippet,contentDetails",
+            id=",".join(video_ids),
+        )
+        response = request.execute()
+    except HttpError as e:
+        # Map HTTP errors to our provider errors
+        mapped_error = map_youtube_error(e, "fetch_youtube_video_metadata")
+        if isinstance(mapped_error, ProviderError):
+            raise mapped_error
+        else:
+            # Fallback: wrap as InvalidProviderResponse
+            raise InvalidProviderResponse("youtube", "fetch_youtube_video_metadata", str(e))
+    except Exception as e:
+        # Handle non-HttpError exceptions
+        raise InvalidProviderResponse("youtube", "fetch_youtube_video_metadata", str(e))
+
+    # Check for cancellation after the API call
+    if hasattr(cancel, "raise_if_cancelled"):
+        cancel.raise_if_cancelled()
+    elif hasattr(cancel, "is_cancelled") and cancel.is_cancelled():
+        raise CancellationRequested("youtube", "fetch_youtube_video_metadata")
+
+    # Parse response
+    items = response.get("items", [])
+    result: dict[str, YouTubeVideoMetadata] = {}
+
+    for item in items:
+        video_id = item.get("id")
+        if not video_id:
+            continue
+
+        snippet = item.get("snippet", {})
+        content_details = item.get("contentDetails", {})
+
+        title = snippet.get("title", "")
+        channel_id = snippet.get("channelId", "")
+        channel_title = snippet.get("channelTitle", "")
+        duration_iso = content_details.get("duration", "")
+        thumbnails = snippet.get("thumbnails", {})
+        thumbnail_url = None
+        if thumbnails:
+            # Use the highest quality thumbnail available
+            for size in ("maxres", "high", "medium", "default"):
+                if size in thumbnails and thumbnails[size].get("url"):
+                    thumbnail_url = thumbnails[size].get("url")
+                    break
+
+        # Parse duration
+        duration_ms = 0
+        if duration_iso:
+            try:
+                duration = isodate.parse_duration(duration_iso)
+                duration_ms = int(duration.total_seconds() * 1000)
+            except (isodate.ISO8601Error, ValueError, TypeError):
+                # If parsing fails, keep duration_ms as 0
+                pass
+
+        # Skip videos with missing essential fields
+        if not title or not channel_id:
+            continue
+
+        metadata = YouTubeVideoMetadata(
+            title=title,
+            channel_id=channel_id,
+            channel_title=channel_title,
+            duration_iso=duration_iso,
+            duration_ms=duration_ms,
+            thumbnail_url=thumbnail_url,
+        )
+        result[video_id] = metadata
+
+    return result
+
+
+def merge_youtube_video_metadata_batches(
+    client: object,
+    video_ids: Sequence[str],
+    cancel: CancellationToken,
+    chunk_size: int = 50,
+) -> dict[str, YouTubeVideoMetadata]:
+    """Fetch video metadata in batches and merge the results.
+
+    This function splits the provided video IDs into batches of at most
+    chunk_size, calls fetch_youtube_video_metadata for each batch, and
+    merges the dictionaries into a single result. The function preserves
+    all video IDs that were successfully fetched and merges dictionaries
+    without losing any IDs.
+
+    Args:
+        client: YouTube Data API client (googleapiclient discovery resource).
+        video_ids: Sequence of video IDs to fetch metadata for.
+        cancel: CancellationToken to check for cancellation requests.
+        chunk_size: Maximum size of each batch. Defaults to 50 (YouTube API limit).
+
+    Returns:
+        dict[str, YouTubeVideoMetadata]: Dictionary mapping video ID to
+        metadata for each video found across all batches.
+
+    Raises:
+        AuthenticationRequired: If credentials are invalid or expired.
+        PermissionDenied: If the user lacks permission to access the videos.
+        RateLimited: If the YouTube API rate limit is exceeded.
+        InvalidProviderResponse: If the response is malformed or missing fields.
+        TemporaryProviderFailure: If the API is temporarily unavailable.
+        CancellationRequested: If the operation is cancelled via the token.
+
+    Examples:
+        >>> # Fetch metadata for 75 video IDs
+        >>> result = merge_youtube_video_metadata_batches(client, video_ids, cancel)
+        >>> len(result)  # Successfully fetched video IDs (up to 75)
+        75
+    """
+    # Split video IDs into batches
+    batches = chunk_video_ids(video_ids, chunk_size)
+
+    # Initialize merged result dictionary
+    merged: dict[str, YouTubeVideoMetadata] = {}
+
+    # Iterate over each batch and merge results
+    for batch in batches:
+        # Check for cancellation before each batch
+        if hasattr(cancel, "raise_if_cancelled"):
+            cancel.raise_if_cancelled()
+        elif hasattr(cancel, "is_cancelled") and cancel.is_cancelled():
+            raise CancellationRequested("youtube", "merge_youtube_video_metadata_batches")
+
+        # Fetch metadata for this batch
+        batch_result = fetch_youtube_video_metadata(client, batch, cancel)
+
+        # Merge batch results into the merged dictionary
+        # This preserves all IDs and doesn't lose any entries
+        for video_id, metadata in batch_result.items():
+            merged[video_id] = metadata
+
+    return merged
 
 
 def chunk_video_ids(video_ids: Sequence[str], chunk_size: int = 50) -> list[list[str]]:
