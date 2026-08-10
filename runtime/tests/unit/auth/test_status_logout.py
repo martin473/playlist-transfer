@@ -1320,3 +1320,427 @@ class TestProbeYoutubeAuthStatus:
 
                     assert result.state == "invalid"
                     assert "YouTube API error: 403" in result.safe_message
+
+
+class TestGetAuthStatus:
+    """Tests for get_auth_status dispatcher function."""
+
+    def test_get_auth_status_spotify_missing(self) -> None:
+        """Test that get_auth_status returns 'missing' for Spotify with no credentials."""
+        from playlist_bridge.auth.status import get_auth_status
+        from playlist_bridge.domain.enums import DestinationService
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = None
+
+        result = get_auth_status(
+            service=DestinationService.SPOTIFY,
+            profile_name="test-profile",
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        assert result.service == DestinationService.SPOTIFY
+        assert result.profile_name == "test-profile"
+        assert result.state == "missing"
+        assert "No Spotify credentials found" in result.safe_message
+
+    def test_get_auth_status_spotify_authenticated(self) -> None:
+        """Test that get_auth_status returns 'authenticated' for Spotify with valid credentials."""
+        from playlist_bridge.auth.status import get_auth_status
+        from playlist_bridge.domain.enums import DestinationService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "access_token": "valid-token",
+            "refresh_token": "refresh-token",
+        }
+
+        mock_profile = MagicMock()
+        mock_profile.provider_user_id = "spotify-user-123"
+        mock_profile.display_name = "Spotify User"
+
+        with patch("playlist_bridge.auth.spotify.probe_spotify_identity") as mock_probe:
+            mock_probe.return_value = mock_profile
+
+            result = get_auth_status(
+                service=DestinationService.SPOTIFY,
+                profile_name="test-profile",
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+        assert result.service == DestinationService.SPOTIFY
+        assert result.profile_name == "test-profile"
+        assert result.state == "authenticated"
+        assert result.provider_user_id == "spotify-user-123"
+        assert result.display_name == "Spotify User"
+        assert "Spotify authentication successful" in result.safe_message
+
+    def test_get_auth_status_youtube_missing(self) -> None:
+        """Test that get_auth_status returns 'missing' for YouTube with no credentials."""
+        from playlist_bridge.auth.status import get_auth_status
+        from playlist_bridge.domain.enums import SourceService
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = None
+
+        result = get_auth_status(
+            service=SourceService.YOUTUBE,
+            profile_name="test-profile",
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        assert result.service == SourceService.YOUTUBE
+        assert result.profile_name == "test-profile"
+        assert result.state == "missing"
+        assert "No YouTube credentials found" in result.safe_message
+
+    def test_get_auth_status_youtube_authenticated(self) -> None:
+        """Test that get_auth_status returns 'authenticated' for YouTube with valid credentials."""
+        from playlist_bridge.auth.status import get_auth_status
+        from playlist_bridge.domain.enums import SourceService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = {
+            "access_token": "valid-token",
+            "refresh_token": "refresh-token",
+        }
+
+        mock_profile = MagicMock()
+        mock_profile.provider_user_id = "youtube-user-123"
+        mock_profile.display_name = "YouTube User"
+
+        with patch("playlist_bridge.auth.youtube.probe_youtube_identity") as mock_probe:
+            mock_probe.return_value = mock_profile
+
+            with patch("google.oauth2.credentials.Credentials") as mock_creds:
+                mock_creds.return_value = MagicMock()
+
+                result = get_auth_status(
+                    service=SourceService.YOUTUBE,
+                    profile_name="test-profile",
+                    profiles=mock_profiles,
+                    credentials=mock_credentials,
+                )
+
+        assert result.service == SourceService.YOUTUBE
+        assert result.profile_name == "test-profile"
+        assert result.state == "authenticated"
+        assert result.provider_user_id == "youtube-user-123"
+        assert result.display_name == "YouTube User"
+        assert "YouTube authentication successful" in result.safe_message
+
+    def test_get_auth_status_unsupported_service_raises_value_error(self) -> None:
+        """Test that get_auth_status raises ValueError for unsupported services."""
+        from playlist_bridge.auth.status import get_auth_status
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        # Create a dummy service that isn't SourceService or DestinationService
+        class DummyService:
+            pass
+
+        with pytest.raises(ValueError, match="Unsupported service"):
+            get_auth_status(
+                service=DummyService(),  # type: ignore
+                profile_name="test-profile",
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+
+class TestGetRequestedAuthStatuses:
+    """Tests for get_requested_auth_statuses aggregator function."""
+
+    def test_get_requested_auth_statuses_empty_requests(self) -> None:
+        """Test that empty requests returns empty list."""
+        from playlist_bridge.auth.status import get_requested_auth_statuses
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        result = get_requested_auth_statuses(
+            requests=[],
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        assert result == []
+
+    def test_get_requested_auth_statuses_single_spotify_request(self) -> None:
+        """Test a single Spotify request returns correct status."""
+        from playlist_bridge.auth.status import get_requested_auth_statuses
+        from playlist_bridge.domain.enums import DestinationService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+        mock_credentials.load.return_value = None
+
+        with patch("playlist_bridge.auth.status.get_auth_status") as mock_get:
+            mock_status = MagicMock()
+            mock_status.service = DestinationService.SPOTIFY
+            mock_status.profile_name = "spotify-profile"
+            mock_status.state = "missing"
+            mock_get.return_value = mock_status
+
+            result = get_requested_auth_statuses(
+                requests=[(DestinationService.SPOTIFY, "spotify-profile")],
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+        assert len(result) == 1
+        assert result[0].service == DestinationService.SPOTIFY
+        assert result[0].profile_name == "spotify-profile"
+        assert result[0].state == "missing"
+
+    def test_get_requested_auth_statuses_multiple_requests(self) -> None:
+        """Test multiple requests return correct statuses in order."""
+        from playlist_bridge.auth.status import get_requested_auth_statuses
+        from playlist_bridge.domain.enums import DestinationService, SourceService
+        from unittest.mock import MagicMock, patch
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        with patch("playlist_bridge.auth.status.get_auth_status") as mock_get:
+            # Create mock statuses for each request
+            status1 = MagicMock()
+            status1.service = DestinationService.SPOTIFY
+            status1.profile_name = "spotify-profile"
+            status1.state = "authenticated"
+
+            status2 = MagicMock()
+            status2.service = SourceService.YOUTUBE
+            status2.profile_name = "youtube-profile"
+            status2.state = "missing"
+
+            status3 = MagicMock()
+            status3.service = DestinationService.SPOTIFY
+            status3.profile_name = "spotify-profile-2"
+            status3.state = "expired_refreshable"
+
+            mock_get.side_effect = [status1, status2, status3]
+
+            result = get_requested_auth_statuses(
+                requests=[
+                    (DestinationService.SPOTIFY, "spotify-profile"),
+                    (SourceService.YOUTUBE, "youtube-profile"),
+                    (DestinationService.SPOTIFY, "spotify-profile-2"),
+                ],
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+        assert len(result) == 3
+        assert result[0].service == DestinationService.SPOTIFY
+        assert result[0].profile_name == "spotify-profile"
+        assert result[0].state == "authenticated"
+        assert result[1].service == SourceService.YOUTUBE
+        assert result[1].profile_name == "youtube-profile"
+        assert result[1].state == "missing"
+        assert result[2].service == DestinationService.SPOTIFY
+        assert result[2].profile_name == "spotify-profile-2"
+        assert result[2].state == "expired_refreshable"
+
+
+class TestLogoutSpotifyProfile:
+    """Tests for logout_spotify_profile function."""
+
+    def test_logout_spotify_profile_success(self) -> None:
+        """Test successful logout deletes credentials and returns profile."""
+        from playlist_bridge.auth.spotify import logout_spotify_profile
+        from playlist_bridge.domain.enums import DestinationService
+        from playlist_bridge.domain.models import AccountProfile
+        from unittest.mock import MagicMock
+
+        # Setup
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        # Create a profile to return
+        profile = AccountProfile(
+            profile_name="test-profile",
+            service="spotify",
+            provider_user_id="test-user-id",
+            display_name="Test User",
+        )
+        mock_profiles.get.return_value = profile
+        mock_credentials.delete.return_value = True
+
+        # Execute
+        result = logout_spotify_profile(
+            profile_name="test-profile",
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        # Verify
+        mock_profiles.get.assert_called_once_with(DestinationService.SPOTIFY, "test-profile")
+        mock_credentials.delete.assert_called_once_with(DestinationService.SPOTIFY, "test-profile")
+        assert result == profile
+        assert result.profile_name == "test-profile"
+        assert result.service == "spotify"
+        assert result.provider_user_id == "test-user-id"
+        assert result.display_name == "Test User"
+
+    def test_logout_spotify_profile_empty_profile_name_raises_error(self) -> None:
+        """Test that empty profile_name raises ValueError."""
+        from playlist_bridge.auth.spotify import logout_spotify_profile
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        with pytest.raises(ValueError, match="profile_name must not be empty"):
+            logout_spotify_profile(
+                profile_name="",
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+    def test_logout_spotify_profile_none_profile_name_raises_error(self) -> None:
+        """Test that None profile_name raises ValueError."""
+        from playlist_bridge.auth.spotify import logout_spotify_profile
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        with pytest.raises(ValueError, match="profile_name must not be empty"):
+            logout_spotify_profile(
+                profile_name=None,  # type: ignore
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+    def test_logout_spotify_profile_none_profiles_raises_error(self) -> None:
+        """Test that None profiles repository raises ValueError."""
+        from playlist_bridge.auth.spotify import logout_spotify_profile
+        from unittest.mock import MagicMock
+
+        mock_credentials = MagicMock()
+
+        with pytest.raises(ValueError, match="profiles repository must not be None"):
+            logout_spotify_profile(
+                profile_name="test-profile",
+                profiles=None,  # type: ignore
+                credentials=mock_credentials,
+            )
+
+    def test_logout_spotify_profile_none_credentials_raises_error(self) -> None:
+        """Test that None credentials store raises ValueError."""
+        from playlist_bridge.auth.spotify import logout_spotify_profile
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+
+        with pytest.raises(ValueError, match="credentials store must not be None"):
+            logout_spotify_profile(
+                profile_name="test-profile",
+                profiles=mock_profiles,
+                credentials=None,  # type: ignore
+            )
+
+    def test_logout_spotify_profile_not_found_raises_error(self) -> None:
+        """Test that non-existent profile raises ValueError."""
+        from playlist_bridge.auth.spotify import logout_spotify_profile
+        from playlist_bridge.domain.enums import DestinationService
+        from unittest.mock import MagicMock
+
+        mock_profiles = MagicMock()
+        mock_profiles.get.return_value = None
+        mock_credentials = MagicMock()
+
+        with pytest.raises(ValueError, match="Profile 'nonexistent' not found for Spotify"):
+            logout_spotify_profile(
+                profile_name="nonexistent",
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+    def test_logout_spotify_profile_credential_delete_failure_raises_error(self) -> None:
+        """Test that credential deletion failure propagates the error."""
+        from playlist_bridge.auth.spotify import logout_spotify_profile
+        from playlist_bridge.domain.enums import DestinationService
+        from playlist_bridge.domain.models import AccountProfile
+        from playlist_bridge.ports import CredentialCorruptionError
+        from unittest.mock import MagicMock
+
+        # Setup
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        profile = AccountProfile(
+            profile_name="test-profile",
+            service="spotify",
+            provider_user_id="test-user-id",
+            display_name="Test User",
+        )
+        mock_profiles.get.return_value = profile
+        mock_credentials.delete.side_effect = CredentialCorruptionError(
+            service="spotify",
+            profile_name="test-profile",
+            safe_message="Corrupted credentials",
+        )
+
+        with pytest.raises(CredentialCorruptionError) as exc_info:
+            logout_spotify_profile(
+                profile_name="test-profile",
+                profiles=mock_profiles,
+                credentials=mock_credentials,
+            )
+
+        assert exc_info.value.service == "spotify"
+        assert exc_info.value.profile_name == "test-profile"
+        assert "Corrupted credentials" in exc_info.value.safe_message
+
+    def test_logout_spotify_profile_returns_profile_without_credentials(self) -> None:
+        """Test that the returned profile has metadata preserved but credentials are deleted."""
+        from playlist_bridge.auth.spotify import logout_spotify_profile
+        from playlist_bridge.domain.enums import DestinationService
+        from playlist_bridge.domain.models import AccountProfile
+        from unittest.mock import MagicMock
+
+        # Setup
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        # Create a profile with specific metadata
+        profile = AccountProfile(
+            profile_name="my-spotify",
+            service="spotify",
+            provider_user_id="spotify-user-456",
+            display_name="My Spotify Account",
+        )
+        mock_profiles.get.return_value = profile
+        mock_credentials.delete.return_value = True
+
+        # Execute
+        result = logout_spotify_profile(
+            profile_name="my-spotify",
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        # Verify the profile metadata is preserved (credentials are now missing)
+        assert result.profile_name == "my-spotify"
+        assert result.service == "spotify"
+        assert result.provider_user_id == "spotify-user-456"
+        assert result.display_name == "My Spotify Account"
+        # The credentials were deleted, making the auth state effectively "missing"
+        mock_credentials.delete.assert_called_once_with(DestinationService.SPOTIFY, "my-spotify")

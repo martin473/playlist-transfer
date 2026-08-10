@@ -8,7 +8,7 @@ from spotipy.oauth2 import SpotifyOauthError
 from playlist_bridge.credentials.store import KeyringCacheHandler
 from playlist_bridge.domain.enums import DestinationService, SourceService
 from playlist_bridge.domain.models import AccountProfile
-from playlist_bridge.ports import AccountProfileRepository, CredentialStore
+from playlist_bridge.ports import AccountProfileRepository, CredentialCorruptionError, CredentialStore, KeyringError
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
     InvalidProviderResponse,
@@ -423,3 +423,57 @@ def probe_spotify_identity(client: Spotify, profile_name: str) -> AccountProfile
             operation="probe_identity",
             safe_message=f"Spotify API temporarily unavailable: {e}",
         ) from e
+
+
+def logout_spotify_profile(
+    profile_name: str,
+    profiles: AccountProfileRepository,
+    credentials: CredentialStore,
+) -> AccountProfile:
+    """Log out of a Spotify profile by deleting its stored credentials.
+
+    This function deletes the Spotify OAuth token for the given profile from
+    the credential store while preserving the profile metadata in the repository.
+    The profile is returned with its state effectively becoming "missing" since
+    the credentials are removed.
+
+    Args:
+        profile_name: The name of the Spotify profile to log out.
+        profiles: Repository for accessing account profile information.
+        credentials: Credential store for OAuth token deletion.
+
+    Returns:
+        AccountProfile: The account profile for the logged-out user.
+
+    Raises:
+        ValueError: If profile_name is empty or None.
+        CredentialCorruptionError: If the credential store encounters malformed data.
+        KeyringError: If the keyring backend fails.
+
+    Side Effects:
+        - os_keychain_delete: Deletes the Spotify OAuth token from the system keychain.
+        - sqlite_read: Reads the profile metadata from the database.
+    """
+    if not profile_name or not profile_name.strip():
+        raise ValueError("profile_name must not be empty")
+    if profiles is None:
+        raise ValueError("profiles repository must not be None")
+    if credentials is None:
+        raise ValueError("credentials store must not be None")
+
+    # Retrieve the profile metadata first (will raise ValueError if not found)
+    profile = profiles.get(DestinationService.SPOTIFY, profile_name)
+    if profile is None:
+        raise ValueError(f"Profile '{profile_name}' not found for Spotify")
+
+    # Delete the stored credentials from the keyring
+    try:
+        credentials.delete(DestinationService.SPOTIFY, profile_name)
+    except Exception as e:
+        # Re-raise CredentialCorruptionError or KeyringError as-is
+        if isinstance(e, (CredentialCorruptionError, KeyringError)):
+            raise
+        raise KeyringError(f"Failed to delete Spotify credentials for '{profile_name}': {e}") from e
+
+    # Return the profile (the credentials are now deleted, making the state "missing")
+    return profile
