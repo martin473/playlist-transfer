@@ -2,13 +2,23 @@
 
 import json
 import uuid
-from datetime import datetime
-from typing import NamedTuple, Sequence, TextIO, Union
+from datetime import datetime, timezone
+from typing import NamedTuple, Protocol, Sequence, TextIO, Union, Optional
 
-from playlist_bridge.domain.models import TransferRequest
-from playlist_bridge.ports import JobRepository
-from playlist_bridge.domain.events import JobEvent, JobEventAdapter
-from playlist_bridge.domain.models import SourceTrack, MatchDecision, SpotifyCandidate
+from playlist_bridge.domain.models import (
+    TransferRequest,
+    LoadedSourcePlaylist,
+    SourcePlaylistMetadata,
+    PlaylistReference,
+    SourceTrack,
+    MatchDecision,
+    SpotifyCandidate,
+)
+from playlist_bridge.ports import JobRepository, JobNotFoundError, LeaseLostError
+from playlist_bridge.domain.events import JobEvent, JobEventAdapter, SourceProgressEvent
+from playlist_bridge.domain.enums import JobStatus
+from playlist_bridge.providers.youtube import SourceAdapter, CancellationToken
+from playlist_bridge.jobs.cancellation import EventEmitter
 
 
 def new_job_id() -> str:
@@ -290,6 +300,107 @@ def calculate_transfer_counts(
         skipped=skipped,
         non_track=non_track,
     )
+
+
+# Define RuntimeDependencies as a protocol for dependency injection
+class RuntimeDependencies(Protocol):
+    """Container for runtime dependencies needed by job stages."""
+    jobs: JobRepository
+    source_adapter: SourceAdapter
+
+
+def load_source_stage(
+    job_id: str,
+    request: TransferRequest,
+    dependencies: RuntimeDependencies,
+    emit: EventEmitter,
+    cancel: CancellationToken,
+    lease_token: str,
+) -> LoadedSourcePlaylist:
+    """Load source playlist for a transfer job.
+
+    This function:
+    1. Retrieves the job from the repository
+    2. Verifies the lease token
+    3. Updates job state to "reading"
+    4. Emits a SourceProgressEvent
+    5. Loads the playlist using the source adapter
+    6. Returns the loaded playlist
+
+    Args:
+        job_id: Unique identifier of the job.
+        request: Transfer request containing source/destination details.
+        dependencies: Runtime dependencies (job repo, source adapter).
+        emit: Event emitter callback for job events.
+        cancel: Cancellation token for checking if operation should stop.
+        lease_token: Lease token for verifying lease ownership.
+
+    Returns:
+        LoadedSourcePlaylist containing playlist metadata and ordered tracks.
+
+    Raises:
+        JobNotFoundError: If the job does not exist.
+        LeaseLostError: If the lease token does not match.
+        AuthenticationRequired: If authentication with source service fails.
+        PermissionDenied: If access to the playlist is denied.
+        ProviderNotFound: If the source service URL is invalid.
+        RateLimited: If rate limit is exceeded.
+        InvalidProviderResponse: If provider returns malformed data.
+        TemporaryProviderFailure: If provider is temporarily unavailable.
+        CancellationRequested: If operation is cancelled.
+    """
+    # Get job from repository
+    job = dependencies.jobs.get(job_id)
+    if job is None:
+        raise JobNotFoundError(job_id)
+
+    # Check lease token
+    if job.lease_token != lease_token:
+        raise LeaseLostError(job_id)
+
+    # Check for cancellation before starting
+    cancel.raise_if_cancelled()
+
+    # 120.01: Update job state to reading and emit event
+    dependencies.jobs.update_status(job_id, JobStatus.READING)
+
+    # Emit SourceProgressEvent with initial state
+    emit(SourceProgressEvent(
+        type="source_progress",
+        job_id=job_id,
+        total_source_items=0,
+        loaded_count=0,
+        normalized_count=0,
+        skipped_count=0,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    ))
+
+    # 120.02: Load source playlist using the complete-load method
+    # Create playlist reference from request
+    reference = PlaylistReference(
+        service=request.source_service,
+        playlist_id=request.source_playlist_id,
+    )
+
+    # Load the complete playlist using the source adapter
+    loaded_playlist = dependencies.source_adapter.load_playlist(
+        reference=reference,
+        cancel=cancel,
+    )
+
+    # Emit updated SourceProgressEvent with loaded count
+    emit(SourceProgressEvent(
+        type="source_progress",
+        job_id=job_id,
+        total_source_items=loaded_playlist.metadata.item_count,
+        loaded_count=len(loaded_playlist.tracks),
+        normalized_count=len(loaded_playlist.tracks),
+        skipped_count=0,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    ))
+
+    # Return the loaded playlist
+    return loaded_playlist
 
 
 def accepted_uris_in_source_order(
