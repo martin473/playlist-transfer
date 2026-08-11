@@ -271,6 +271,134 @@ class TestComparisonText:
 
 
 
+class TestRemoveBracketedNoise:
+    """Tests for the remove_bracketed_noise function."""
+
+    def test_removes_official_video(self):
+        """[Official Video] should be removed as noise."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [Official Video]")
+        assert result == "Song Title"
+        
+        result = remove_bracketed_noise("Song Title [Official Video] Extra")
+        assert result == "Song Title Extra"
+
+    def test_removes_official_audio(self):
+        """[Official Audio] should be removed as noise."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [Official Audio]")
+        assert result == "Song Title"
+
+    def test_removes_lyrics(self):
+        """[Lyrics] should be removed as noise."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [Lyrics]")
+        assert result == "Song Title"
+
+    def test_removes_hd_hq(self):
+        """[HD] and [HQ] should be removed as noise."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [HD]")
+        assert result == "Song Title"
+        
+        result = remove_bracketed_noise("Song Title [HQ]")
+        assert result == "Song Title"
+
+    def test_removes_visualizer(self):
+        """[Visualizer] should be removed as noise."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [Visualizer]")
+        assert result == "Song Title"
+
+    def test_preserves_remix_in_brackets(self):
+        """[Remix] should be preserved as a meaningful version term."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [Remix]")
+        assert result == "Song Title [Remix]"
+        
+        result = remove_bracketed_noise("Song Title [Club Mix]")
+        assert result == "Song Title [Club Mix]"
+
+    def test_preserves_live_in_brackets(self):
+        """[Live] should be preserved as a meaningful version term."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [Live]")
+        assert result == "Song Title [Live]"
+
+    def test_preserves_acoustic_in_brackets(self):
+        """[Acoustic] should be preserved as a meaningful version term."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [Acoustic]")
+        assert result == "Song Title [Acoustic]"
+
+    def test_removes_multiple_noise_brackets(self):
+        """Multiple removable noise brackets should all be removed."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [Official Video] [HD]")
+        assert result == "Song Title"
+        
+        # Test multiple brackets where some are removable and some are meaningful
+        # [Official Video] is removable, [Remix] is meaningful and should be preserved
+        result = remove_bracketed_noise("Song Title [Official Video] [Remix]")
+        assert result == "Song Title [Remix]"
+
+    def test_removes_bracket_with_multiple_noise_words(self):
+        """Brackets containing multiple noise words should be removed."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        # "official video" is a removable phrase
+        result = remove_bracketed_noise("Song Title [official video]")
+        assert result == "Song Title"
+
+    def test_preserves_bracket_with_mixed_content(self):
+        """Brackets containing a mix of noise and meaningful terms should be preserved."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        # This has "official" (noise) and "remix" (meaningful)
+        result = remove_bracketed_noise("Song Title [Official Remix]")
+        assert result == "Song Title [Official Remix]"
+
+    def test_preserves_bracket_with_meaningful_term(self):
+        """Brackets containing only meaningful terms should be preserved."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [Extended Mix]")
+        assert result == "Song Title [Extended Mix]"
+
+    def test_handles_empty_string(self):
+        """Empty string should return empty string."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("")
+        assert result == ""
+
+    def test_handles_string_without_brackets(self):
+        """String without brackets should be unchanged."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title")
+        assert result == "Song Title"
+
+    def test_handles_case_insensitive_removal(self):
+        """Removal should be case-insensitive."""
+        from playlist_bridge.matching.normalize import remove_bracketed_noise
+        
+        result = remove_bracketed_noise("Song Title [OFFICIAL VIDEO]")
+        assert result == "Song Title"
+        
+        result = remove_bracketed_noise("Song Title [official video]")
+        assert result == "Song Title"
+
+
 class TestRemovableNoisePhrases:
     """Tests for the REMOVABLE_NOISE_PHRASES constant."""
 

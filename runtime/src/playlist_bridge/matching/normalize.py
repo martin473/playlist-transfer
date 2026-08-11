@@ -2,7 +2,7 @@
 
 import re
 import unicodedata
-from typing import Final
+from typing import Collection, Final
 
 
 # Removable media-label phrases that should be stripped from track titles
@@ -211,6 +211,91 @@ def normalize_unicode_text(value: str) -> str:
     normalized = normalized.strip()
 
     return normalized
+
+
+def remove_bracketed_noise(value: str, removable_phrases: Collection[str] = REMOVABLE_NOISE_PHRASES) -> str:
+    """Remove bracketed segments only when they consist entirely of removable noise phrases.
+
+    This function identifies bracketed segments in the input string (e.g., "[Official Video]",
+    "[Remix]", "[HD]") and removes them only if the content inside the brackets consists
+    entirely of phrases from the removable_phrases set. If a bracketed segment contains any
+    meaningful version term (like "Remix", "Live", etc.), it is preserved.
+
+    The removal is case-insensitive - the removable_phrases set should contain lowercase
+    versions, and the content inside brackets is compared in lowercase.
+
+    Args:
+        value: The input string that may contain bracketed segments.
+        removable_phrases: Collection of phrase strings to treat as removable noise.
+            Defaults to REMOVABLE_NOISE_PHRASES.
+
+    Returns:
+        The string with removable bracketed noise removed, with whitespace cleaned up.
+
+    Example:
+        >>> remove_bracketed_noise("Song Title [Official Video]")
+        'Song Title'
+        >>> remove_bracketed_noise("Song Title [Remix]")
+        'Song Title [Remix]'
+        >>> remove_bracketed_noise("Song Title [HD]")
+        'Song Title'
+    """
+    if not value:
+        return ""
+
+    # Build a set of lowercase removable phrases for case-insensitive matching
+    removable_set = {phrase.lower() for phrase in removable_phrases}
+
+    # Pattern to match bracketed segments: [content]
+    # Using non-greedy matching to handle multiple bracketed segments
+    pattern = r"\[([^\]]+)\]"
+
+    def should_remove(match: re.Match) -> str:
+        """Determine if a bracketed segment should be removed."""
+        content = match.group(1)
+        # Normalize whitespace and split into phrases
+        # Split on common separators: spaces, commas, slashes, etc.
+        # We need to handle cases like "[Official Video]" -> ["official", "video"]
+        # and also "[HD]" -> ["hd"]
+        # but also phrases like "[Official Video]" might be matched as "official video"
+        # We'll use both approaches: try to match the whole content as a phrase,
+        # and also check if all individual words are removable
+
+        # Clean and normalize the content
+        cleaned = content.strip().lower()
+        # Normalize multiple spaces to single space
+        cleaned = re.sub(r"\s+", " ", cleaned)
+
+        # Check if the entire content is a removable phrase
+        if cleaned in removable_set:
+            return ""
+
+        # Check if the content consists of multiple words that are all removable
+        # This handles "Official Video" -> ["official", "video"]
+        words = cleaned.split()
+        if words and all(word in removable_set for word in words):
+            return ""
+
+        # Check if the content contains any meaningful version term
+        # If it does, preserve the whole bracket
+        # This is a safety check - we want to preserve meaningful terms
+        # Even if they might be in the removable set, we should preserve them
+        # Actually, the requirement says: "remove bracketed segments only when they consist
+        # entirely of removable noise phrases" - so if it's entirely removable phrases,
+        # remove it. Otherwise, preserve it.
+
+        # If we get here, the content is not entirely removable noise,
+        # so we preserve the entire bracketed segment
+        return match.group(0)
+
+    # Apply the replacement
+    result = re.sub(pattern, should_remove, value)
+
+    # Clean up extra whitespace that might result from removal
+    result = re.sub(r"\s+", " ", result)
+    result = result.strip()
+
+    return result
 
 
 def comparison_text(value: str) -> str:
