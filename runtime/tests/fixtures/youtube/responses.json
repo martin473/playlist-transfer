@@ -382,5 +382,69 @@
         }
       }
     ]
+  },
+  "deleted_item": {
+    "kind": "youtube#playlistItemListResponse",
+    "etag": "\"deleted_item_etag_007\"",
+    "nextPageToken": null,
+    "prevPageToken": null,
+    "pageInfo": {
+      "totalResults": 1,
+      "resultsPerPage": 50
+    },
+    "items": [
+      {
+        "kind": "youtube#playlistItem",
+        "etag": "\"item_etag_007\"",
+        "id": "PLItem_007",
+        "snippet": {
+          "publishedAt": "2023-12-05T08:00:00Z",
+          "channelId": "UCdeletedchannel203",
+          "title": "Deleted Video - This video has been removed",
+          "description": "This video was removed by the uploader or for policy violation",
+          "thumbnails": {
+            "default": {
+              "url": "https://i.ytimg.com/vi/video007/default.jpg",
+              "width": 120,
+              "height": 90
+            },
+            "medium": {
+              "url": "https://i.ytimg.com/vi/video007/mqdefault.jpg",
+              "width": 320,
+              "height": 180
+            },
+            "high": {
+              "url": "https://i.ytimg.com/vi/video007/hqdefault.jpg",
+              "width": 480,
+              "height": 360
+            }
+          },
+          "channelTitle": "Deleted Channel",
+          "playlistId": "PLdeleted007",
+          "position": 0,
+          "resourceId": {
+            "kind": "youtube#video",
+            "videoId": "video007deleted"
+          },
+          "videoOwnerChannelTitle": "Deleted Channel",
+          "videoOwnerChannelId": "UCdeletedchannel203"
+        },
+        "contentDetails": {
+          "videoId": "video007deleted",
+          "videoPublishedAt": "2023-12-05T08:00:00Z",
+          "duration": "PT3M45S",
+          "dimension": "2d",
+          "definition": "sd",
+          "caption": "false",
+          "licensedContent": false,
+          "regionRestriction": {
+            "allowed": ["US", "GB", "CA"]
+          }
+        },
+        "status": {
+          "privacyStatus": "deleted"
+        }
+      }
+    ]
   }
 }
