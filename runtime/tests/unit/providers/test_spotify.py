@@ -556,3 +556,51 @@ class TestMapSpotifyError:
             assert result.service == "spotify"
             assert result.operation == "search_tracks"
             assert str(status) in str(result)
+
+    def test_map_spotify_error_malformed_success_response(self) -> None:
+        """Test that malformed successful responses map to InvalidProviderResponse.
+
+        This verifies that when the Spotify API returns a successful status
+        (e.g., 200 OK) but the response body is malformed, incomplete, or
+        missing required fields, it maps to InvalidProviderResponse.
+        No partial domain object is returned.
+        """
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+            def __str__(self):
+                return self.msg
+
+        from playlist_bridge.providers.errors import InvalidProviderResponse
+
+        # Scenario 1: 200 OK with malformed data (using a neutral message that doesn't
+        # trigger keyword-based fallback for authentication/permission/not-found)
+        error = MockSpotifyError(200, "Malformed response: missing required field 'name' in track data")
+        result = map_spotify_error(error, "read_items")
+
+        assert isinstance(result, InvalidProviderResponse)
+        assert result.service == "spotify"
+        assert result.operation == "read_items"
+        # Verify that no partial domain object is returned by checking the error type
+        # and that the error message indicates malformed response
+        assert "malformed" in str(result).lower() or "invalid" in str(result).lower()
+
+        # Scenario 2: 200 OK with incomplete data (neutral message)
+        error = MockSpotifyError(200, "Response validation failed: expected 10 items but received 0")
+        result = map_spotify_error(error, "search_tracks")
+
+        assert isinstance(result, InvalidProviderResponse)
+        assert result.service == "spotify"
+        assert result.operation == "search_tracks"
+        assert "validation" in str(result).lower() or "incomplete" in str(result).lower()
+
+        # Scenario 3: Successful status but with data type mismatch (neutral message)
+        error = MockSpotifyError(200, "Data parse error: field 'duration' expected integer but got string")
+        result = map_spotify_error(error, "identity")
+
+        assert isinstance(result, InvalidProviderResponse)
+        assert result.service == "spotify"
+        assert result.operation == "identity"
+        assert "parse" in str(result).lower() or "expected" in str(result).lower()
