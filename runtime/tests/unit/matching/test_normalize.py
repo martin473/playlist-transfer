@@ -2,7 +2,7 @@
 
 import pytest
 
-from playlist_bridge.matching.normalize import normalize_unicode_text
+from playlist_bridge.matching.normalize import normalize_unicode_text, comparison_text
 
 
 class TestNormalizeUnicodeText:
@@ -157,3 +157,115 @@ class TestNormalizeUnicodeText:
         assert normalize_unicode_text("\u201CShape of You\u201D") == '"Shape of You"'
         # With accented characters
         assert normalize_unicode_text("Héllö Wörld") == "Héllö Wörld"
+
+
+class TestComparisonText:
+    """Tests for the comparison_text function."""
+
+    def test_empty_string(self):
+        """Empty string should return empty string."""
+        assert comparison_text("") == ""
+
+    def test_basic_lowercasing(self):
+        """Basic ASCII text should be lowercased."""
+        assert comparison_text("Hello World") == "hello world"
+        assert comparison_text("HELLO") == "hello"
+        assert comparison_text("Mixed Case") == "mixed case"
+
+    def test_german_sharp_s(self):
+        """German sharp ß should casefold to 'ss'."""
+        assert comparison_text("Straße") == "strasse"
+        assert comparison_text("GROß") == "gross"
+        assert comparison_text("Fußball") == "fussball"
+
+    def test_greek_sigma(self):
+        """Greek sigma variants should casefold to sigma."""
+        # Final sigma (ς) and normal sigma (σ) both casefold to σ
+        # Note: Python's casefold() doesn't convert final sigma to regular sigma,
+        # it preserves the distinction. The important thing is that uppercase
+        # and lowercase versions of the same word compare equal.
+        assert comparison_text("κόσμος") == "κόσμοσ"  # final sigma preserved
+        assert comparison_text("ΚΟΣΜΟΣ") == "κοσμοσ"  # uppercase casefolds to lowercase with final sigma
+
+    def test_turkish_dotted_i(self):
+        """Turkish dotted/dotless I handling."""
+        # Dotted I (İ) casefolds to i with dot above
+        assert comparison_text("İstanbul") == "i̇stanbul"
+        # Dotless i (ı) casefolds to ı (preserved)
+        assert comparison_text("ıstanbul") == "ıstanbul"
+
+    def test_casefolded_equivalence(self):
+        """Equivalent capitalization variants should produce equal comparison text."""
+        # This is the core acceptance criterion from the task
+        variants = [
+            ("Hello", "hello"),
+            ("HELLO", "hello"),
+            ("HeLlO", "hello"),
+            ("Straße", "straße"),
+            ("STRASSE", "strasse"),
+            ("Straße", "strasse"),
+        ]
+        # All variants of the same word should produce the same casefolded result
+        assert comparison_text("Hello") == comparison_text("hello")
+        assert comparison_text("HELLO") == comparison_text("hello")
+        assert comparison_text("HeLlO") == comparison_text("hello")
+        assert comparison_text("Straße") == comparison_text("STRASSE")
+        assert comparison_text("Straße") == comparison_text("strasse")
+
+    def test_non_latin_casefolding(self):
+        """Non-Latin scripts should casefold appropriately."""
+        # Cyrillic
+        assert comparison_text("ПРИВЕТ") == "привет"
+        assert comparison_text("Привет") == "привет"
+        # Greek - casefold preserves final sigma
+        assert comparison_text("ΚΟΣΜΟΣ") == "κοσμοσ"
+        assert comparison_text("Κόσμος") == "κόσμοσ"
+        # Arabic (has no case, should be unchanged)
+        assert comparison_text("مرحبا") == "مرحبا"
+        # Hebrew (has no case, should be unchanged)
+        assert comparison_text("שלום") == "שלום"
+
+    def test_punctuation_preserved(self):
+        """Punctuation should be preserved (not normalized)."""
+        assert comparison_text("Hello, World!") == "hello, world!"
+        assert comparison_text("Track - Remix") == "track - remix"
+        assert comparison_text("Track...Remix") == "track...remix"
+
+    def test_whitespace_preserved(self):
+        """Whitespace should be preserved (not normalized)."""
+        assert comparison_text("Hello  world") == "hello  world"
+        assert comparison_text("  leading  ") == "  leading  "
+        assert comparison_text("Hello\nworld") == "hello\nworld"
+
+    def test_casefold_different_from_lower(self):
+        """Casefold can produce different results from lower() for some characters."""
+        # German ß: lower() -> ß, casefold() -> ss
+        assert comparison_text("Straße") != "straße".lower()
+        assert comparison_text("Straße") == "straße".casefold()
+        # Turkish dotted I: lower() -> i, casefold() -> i̇ (i + combining dot above)
+        assert comparison_text("İstanbul") != "istanbul"
+        assert comparison_text("İstanbul") == "i̇stanbul"
+
+    def test_casefold_idempotent(self):
+        """Applying casefold twice should yield the same result."""
+        test_strings = [
+            "Hello World",
+            "Straße",
+            "Κόσμος",
+            "İstanbul",
+            "Привет",
+            "Mixed CASE String!",
+            "",
+        ]
+        for text in test_strings:
+            first = comparison_text(text)
+            second = comparison_text(first)
+            assert first == second, f"Idempotence failed for: {text!r}"
+
+    def test_empty_and_whitespace(self):
+        """Edge cases with empty and whitespace-only strings."""
+        assert comparison_text("") == ""
+        assert comparison_text(" ") == " "
+        assert comparison_text("  ") == "  "
+        assert comparison_text("\t") == "\t"
+

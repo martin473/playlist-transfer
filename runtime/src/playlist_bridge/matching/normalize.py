@@ -119,3 +119,42 @@ def normalize_unicode_text(value: str) -> str:
     normalized = normalized.strip()
 
     return normalized
+
+
+def comparison_text(value: str) -> str:
+    """Generate a comparison-only form using Unicode casefolding.
+
+    This function applies Unicode casefolding (which is more aggressive than
+    lowercasing) to create a form suitable for case-insensitive comparison
+    without changing the display value. It does NOT normalize punctuation,
+    whitespace, or other text characteristics—it only casefolds.
+
+    Unicode casefolding is locale-independent and handles characters from
+    all scripts, including:
+        - German sharp ß -> ss
+        - Greek sigma (σ/ς) -> σ
+        - Turkish dotted/dotless i handling (with special case)
+        - Full-width Latin variants
+
+    Unlike lowercasing which is language-sensitive, casefolding provides
+    a deterministic, locale-independent form for comparison.
+
+    Args:
+        value: The input string to casefold.
+
+    Returns:
+        The casefolded string, suitable for comparison.
+
+    Example:
+        >>> comparison_text("Straße")
+        'strasse'
+        >>> comparison_text("Hello World")
+        'hello world'
+        >>> comparison_text("İstanbul")  # Turkish dotted I
+        'i̇stanbul'
+    """
+    if not value:
+        return ""
+
+    # Use Python's built-in casefold() which implements Unicode casefolding
+    return value.casefold()
