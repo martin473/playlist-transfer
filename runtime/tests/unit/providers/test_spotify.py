@@ -2,6 +2,7 @@
 
 import pytest
 from typing import List, Sequence
+from unittest.mock import MagicMock
 
 from spotipy.exceptions import SpotifyException
 
@@ -665,3 +666,737 @@ def test_authenticated_spotify_adapter_construction_no_network() -> None:
     assert hasattr(adapter, "read_items")
     assert hasattr(adapter, "user_playlists")
 
+
+def test_search_spotify_query_returns_only_track_items() -> None:
+    """Test that search_spotify_query returns only track items and uses explicit limit.
+
+    This test verifies:
+    1. The function uses the explicit limit provided
+    2. It returns only track items (no non-track items like artists or albums)
+    3. Results are properly parsed into SpotifyCandidate objects
+    """
+    from playlist_bridge.providers.spotify import search_spotify_query
+    from spotipy import Spotify
+    
+    # Mock the Spotify client
+    class MockSpotifyClient:
+        def search(self, q, type, market, limit):
+            # Verify that type is "track" and limit is the explicit value
+            assert type == "track"
+            assert limit == 10  # Explicit small limit
+            # Return mock search results with only track items
+            return {
+                "tracks": {
+                    "items": [
+                        {
+                            "id": "track_1",
+                            "uri": "spotify:track:track_1",
+                            "name": "Test Track 1",
+                            "artists": [{"name": "Test Artist 1"}],
+                            "album": {"name": "Test Album 1"},
+                            "duration_ms": 180000,
+                            "explicit": False,
+                            "external_ids": {"isrc": "US-ABC-12-34567"},
+                        },
+                        {
+                            "id": "track_2",
+                            "uri": "spotify:track:track_2",
+                            "name": "Test Track 2",
+                            "artists": [{"name": "Test Artist 2"}],
+                            "album": {"name": "Test Album 2"},
+                            "duration_ms": 240000,
+                            "explicit": True,
+                            "external_ids": {},
+                        },
+                    ]
+                }
+            }
+    
+    client = MockSpotifyClient()
+    
+    # Call the function with explicit limit
+    results = search_spotify_query(
+        client=client,
+        query="test query",
+        market="US",
+        limit=10,
+    )
+    
+    # Verify results
+    assert len(results) == 2
+    assert all(isinstance(candidate, SpotifyCandidate) for candidate in results)
+    
+    # Verify first track
+    assert results[0].track_id == "track_1"
+    assert results[0].uri == "spotify:track:track_1"
+    assert results[0].title == "Test Track 1"
+    assert results[0].artist_names == ["Test Artist 1"]
+    assert results[0].album == "Test Album 1"
+    assert results[0].duration_seconds == 180
+    assert results[0].explicit is False
+    assert results[0].isrc == "US-ABC-12-34567"
+    
+    # Verify second track
+    assert results[1].track_id == "track_2"
+    assert results[1].uri == "spotify:track:track_2"
+    assert results[1].title == "Test Track 2"
+    assert results[1].artist_names == ["Test Artist 2"]
+    assert results[1].album == "Test Album 2"
+    assert results[1].duration_seconds == 240
+    assert results[1].explicit is True
+    assert results[1].isrc is None
+
+
+def test_search_spotify_query_with_market_none() -> None:
+    """Test that search_spotify_query handles market=None correctly."""
+    from playlist_bridge.providers.spotify import search_spotify_query
+    
+    class MockSpotifyClient:
+        def search(self, q, type, market, limit):
+            # Verify market is None
+            assert market is None
+            assert limit == 5
+            return {
+                "tracks": {
+                    "items": [
+                        {
+                            "id": "track_1",
+                            "uri": "spotify:track:track_1",
+                            "name": "Test Track",
+                            "artists": [{"name": "Test Artist"}],
+                            "album": {"name": "Test Album"},
+                            "duration_ms": 180000,
+                            "explicit": False,
+                            "external_ids": {},
+                        }
+                    ]
+                }
+            }
+    
+    client = MockSpotifyClient()
+    results = search_spotify_query(
+        client=client,
+        query="test",
+        market=None,
+        limit=5,
+    )
+    
+    assert len(results) == 1
+    assert results[0].track_id == "track_1"
+
+
+def test_search_spotify_query_empty_response() -> None:
+    """Test that search_spotify_query returns empty list when no results found."""
+    from playlist_bridge.providers.spotify import search_spotify_query
+    
+    class MockSpotifyClient:
+        def search(self, q, type, market, limit):
+            return {"tracks": {"items": []}}
+    
+    client = MockSpotifyClient()
+    results = search_spotify_query(
+        client=client,
+        query="no results",
+        market="US",
+        limit=10,
+    )
+    
+    assert results == []
+
+
+def test_search_spotify_query_null_response() -> None:
+    """Test that search_spotify_query handles null response from Spotify."""
+    from playlist_bridge.providers.spotify import search_spotify_query
+    
+    class MockSpotifyClient:
+        def search(self, q, type, market, limit):
+            return None
+    
+    client = MockSpotifyClient()
+    results = search_spotify_query(
+        client=client,
+        query="test",
+        market="US",
+        limit=10,
+    )
+    
+    assert results == []
+
+
+def test_search_spotify_query_handles_missing_fields() -> None:
+    """Test that search_spotify_query skips incomplete track data gracefully.
+
+    When track data is missing required fields (track_id, artist_names, album),
+    the function should skip those items and continue processing valid ones.
+    """
+    from playlist_bridge.providers.spotify import search_spotify_query
+    
+    class MockSpotifyClient:
+        def search(self, q, type, market, limit):
+            return {
+                "tracks": {
+                    "items": [
+                        {
+                            # Valid track - should be included
+                            "id": "valid_track",
+                            "uri": "spotify:track:valid_track",
+                            "name": "Valid Track",
+                            "artists": [{"name": "Valid Artist"}],
+                            "album": {"name": "Valid Album"},
+                            "duration_ms": 180000,
+                            "explicit": False,
+                            "external_ids": {},
+                        },
+                        {
+                            # Missing id - should be skipped
+                            "uri": "spotify:track:track_1",
+                            "name": "Test Track",
+                            "artists": [{"name": "Test Artist"}],
+                            "album": {"name": "Test Album"},
+                            "duration_ms": 180000,
+                            "explicit": False,
+                        },
+                        {
+                            # Missing artists - should be skipped
+                            "id": "no_artist_track",
+                            "uri": "spotify:track:no_artist_track",
+                            "name": "No Artist Track",
+                            "artists": [],
+                            "album": {"name": "Test Album"},
+                            "duration_ms": 180000,
+                            "explicit": False,
+                        },
+                        {
+                            # Missing album name - should be skipped
+                            "id": "no_album_track",
+                            "uri": "spotify:track:no_album_track",
+                            "name": "No Album Track",
+                            "artists": [{"name": "Test Artist"}],
+                            "album": {},
+                            "duration_ms": 180000,
+                            "explicit": False,
+                        },
+                    ]
+                }
+            }
+    
+    client = MockSpotifyClient()
+    results = search_spotify_query(
+        client=client,
+        query="test",
+        market="US",
+        limit=10,
+    )
+    
+    # Only the valid track should be returned
+    assert len(results) == 1
+    assert results[0].track_id == "valid_track"
+    assert results[0].uri == "spotify:track:valid_track"
+    assert results[0].title == "Valid Track"
+    assert results[0].artist_names == ["Valid Artist"]
+    assert results[0].album == "Valid Album"
+    assert results[0].duration_seconds == 180
+    assert results[0].explicit is False
+    assert results[0].isrc is None
+
+
+def test_get_spotify_identity_returns_user_identity() -> None:
+    """Test that get_spotify_identity returns the user identity from the Spotify API."""
+    from playlist_bridge.providers.spotify import get_spotify_identity
+
+    class MockSpotifyClient:
+        def me(self):
+            return {
+                "id": "test_user_123",
+                "display_name": "Test User",
+                "email": "test@example.com",
+            }
+
+    client = MockSpotifyClient()
+    identity = get_spotify_identity(client)  # type: ignore
+    
+    assert identity.provider_user_id == "test_user_123"
+    assert identity.display_name == "Test User"
+    assert identity.service == "spotify"
+
+
+def test_get_spotify_identity_maps_absent_display_name_to_fallback() -> None:
+    """Test that get_spotify_identity maps absent display name to the user ID as a safe fallback."""
+    from playlist_bridge.providers.spotify import get_spotify_identity
+
+    class MockSpotifyClient:
+        def me(self):
+            return {
+                "id": "test_user_456",
+                # display_name is absent
+            }
+
+    client = MockSpotifyClient()
+    identity = get_spotify_identity(client)  # type: ignore
+    
+    assert identity.provider_user_id == "test_user_456"
+    assert identity.display_name == "test_user_456"  # Fallback to user ID
+    assert identity.service == "spotify"
+
+
+def test_get_spotify_identity_maps_empty_display_name_to_fallback() -> None:
+    """Test that get_spotify_identity maps empty display name to the user ID as a safe fallback."""
+    from playlist_bridge.providers.spotify import get_spotify_identity
+
+    class MockSpotifyClient:
+        def me(self):
+            return {
+                "id": "test_user_789",
+                "display_name": "",  # Empty string
+            }
+
+    client = MockSpotifyClient()
+    identity = get_spotify_identity(client)  # type: ignore
+    
+    assert identity.provider_user_id == "test_user_789"
+    assert identity.display_name == "test_user_789"  # Fallback to user ID
+    assert identity.service == "spotify"
+
+
+def test_get_spotify_identity_raises_invalid_provider_response_for_null_response() -> None:
+    """Test that get_spotify_identity raises InvalidProviderResponse when Spotify returns null."""
+    from playlist_bridge.providers.spotify import get_spotify_identity
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    class MockSpotifyClient:
+        def me(self):
+            return None
+
+    client = MockSpotifyClient()
+    
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        get_spotify_identity(client)  # type: ignore
+    
+    assert "null response" in str(exc_info.value)
+
+
+def test_get_spotify_identity_raises_invalid_provider_response_for_missing_id() -> None:
+    """Test that get_spotify_identity raises InvalidProviderResponse when id field is missing."""
+    from playlist_bridge.providers.spotify import get_spotify_identity
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    class MockSpotifyClient:
+        def me(self):
+            return {
+                "display_name": "Test User",
+                # id is missing
+            }
+
+    client = MockSpotifyClient()
+    
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        get_spotify_identity(client)  # type: ignore
+    
+    assert "'id' field" in str(exc_info.value)
+
+
+def test_read_spotify_playlist_items_returns_uris_and_none() -> None:
+    """Test that read_spotify_playlist_items returns ordered URIs with None for unavailable tracks.
+
+    This test verifies that the function correctly paginates playlist items and returns
+    a list where each position is a URI string for available tracks or None for unavailable
+    tracks, and that the position count matches the provider item count.
+    """
+    from playlist_bridge.providers.spotify import read_spotify_playlist_items
+    from playlist_bridge.jobs.cancellation import FakeCancellationToken
+
+    class MockSpotifyClient:
+        def __init__(self):
+            self._call_count = 0
+
+        def playlist_items(self, playlist_id, limit, offset):
+            self._call_count += 1
+            # Return a paginated response with 3 items on first page and 2 on second
+            if offset == 0:
+                return {
+                    "items": [
+                        {"track": {"id": "track1", "uri": "spotify:track:track1"}},
+                        {"track": None},  # Unavailable track
+                        {"track": {"id": "track3", "uri": "spotify:track:track3"}},
+                    ],
+                    "total": 5,
+                }
+            elif offset == 3:
+                return {
+                    "items": [
+                        {"track": {"id": "track4", "uri": "spotify:track:track4"}},
+                        {"track": {"id": None, "uri": None}},  # Track with no URI
+                    ],
+                    "total": 5,
+                }
+            else:
+                return {"items": [], "total": 5}
+
+    client = MockSpotifyClient()
+    cancel = FakeCancellationToken()
+
+    result = read_spotify_playlist_items(client, "test_playlist_id", cancel)  # type: ignore
+
+    # Verify the position count matches the provider item count (5 items total)
+    assert len(result) == 5
+
+    # Verify the order and content
+    expected = [
+        "spotify:track:track1",
+        None,  # Unavailable track
+        "spotify:track:track3",
+        "spotify:track:track4",
+        None,  # Track with no URI
+    ]
+    assert result == expected
+
+
+def test_read_spotify_playlist_items_handles_empty_playlist() -> None:
+    """Test that read_spotify_playlist_items returns an empty list for an empty playlist."""
+    from playlist_bridge.providers.spotify import read_spotify_playlist_items
+    from playlist_bridge.jobs.cancellation import FakeCancellationToken
+
+    class MockSpotifyClient:
+        def playlist_items(self, playlist_id, limit, offset):
+            return {"items": [], "total": 0}
+
+    client = MockSpotifyClient()
+    cancel = FakeCancellationToken()
+
+    result = read_spotify_playlist_items(client, "empty_playlist", cancel)  # type: ignore
+
+    assert result == []
+
+
+def test_read_spotify_playlist_items_handles_null_response() -> None:
+    """Test that read_spotify_playlist_items returns an empty list when the API returns None."""
+    from playlist_bridge.providers.spotify import read_spotify_playlist_items
+    from playlist_bridge.jobs.cancellation import FakeCancellationToken
+
+    class MockSpotifyClient:
+        def playlist_items(self, playlist_id, limit, offset):
+            return None
+
+    client = MockSpotifyClient()
+    cancel = FakeCancellationToken()
+
+    result = read_spotify_playlist_items(client, "test_playlist", cancel)  # type: ignore
+
+    assert result == []
+
+
+def test_map_spotify_track_valid() -> None:
+    """Test that map_spotify_track correctly maps a valid Spotify track object."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    raw_track = {
+        "id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "name": "Blinding Lights",
+        "artists": [
+            {"name": "The Weeknd"}
+        ],
+        "album": {
+            "name": "After Hours"
+        },
+        "duration_ms": 200000,
+        "explicit": False,
+        "external_ids": {
+            "isrc": "USUG12000235"
+        },
+        "available_markets": ["US", "GB", "CA"]
+    }
+
+    result = map_spotify_track(raw_track, "US")
+
+    assert result.track_id == "6rqhFgbbKwnb9MLmUQDhG6"
+    assert result.uri == "spotify:track:6rqhFgbbKwnb9MLmUQDhG6"
+    assert result.title == "Blinding Lights"
+    assert result.artist_names == ["The Weeknd"]
+    assert result.album == "After Hours"
+    assert result.duration_seconds == 200
+    assert result.explicit is False
+    assert result.isrc == "USUG12000235"
+    assert result.market_availability == ["US", "GB", "CA"]
+
+
+def test_map_spotify_track_without_market() -> None:
+    """Test that map_spotify_track works when market is None."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+
+    raw_track = {
+        "id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "name": "Blinding Lights",
+        "artists": [
+            {"name": "The Weeknd"}
+        ],
+        "album": {
+            "name": "After Hours"
+        },
+        "duration_ms": 200000,
+        "explicit": False,
+        "available_markets": ["US", "GB", "CA"]
+    }
+
+    result = map_spotify_track(raw_track, None)
+
+    assert result.track_id == "6rqhFgbbKwnb9MLmUQDhG6"
+    assert result.market_availability is None
+
+
+def test_map_spotify_track_missing_id() -> None:
+    """Test that map_spotify_track raises InvalidProviderResponse when 'id' is missing."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    raw_track = {
+        "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "name": "Blinding Lights",
+        "artists": [{"name": "The Weeknd"}],
+        "album": {"name": "After Hours"},
+        "duration_ms": 200000,
+    }
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        map_spotify_track(raw_track, None)
+    assert "Missing or invalid 'id' field" in str(exc_info.value)
+
+
+def test_map_spotify_track_missing_uri() -> None:
+    """Test that map_spotify_track raises InvalidProviderResponse when 'uri' is missing."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    raw_track = {
+        "id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "name": "Blinding Lights",
+        "artists": [{"name": "The Weeknd"}],
+        "album": {"name": "After Hours"},
+        "duration_ms": 200000,
+    }
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        map_spotify_track(raw_track, None)
+    assert "Missing or invalid 'uri' field" in str(exc_info.value)
+
+
+def test_map_spotify_track_missing_name() -> None:
+    """Test that map_spotify_track raises InvalidProviderResponse when 'name' is missing."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    raw_track = {
+        "id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "artists": [{"name": "The Weeknd"}],
+        "album": {"name": "After Hours"},
+        "duration_ms": 200000,
+    }
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        map_spotify_track(raw_track, None)
+    assert "Missing or invalid 'name' field" in str(exc_info.value)
+
+
+def test_map_spotify_track_missing_artists() -> None:
+    """Test that map_spotify_track raises InvalidProviderResponse when 'artists' is missing."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    raw_track = {
+        "id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "name": "Blinding Lights",
+        "album": {"name": "After Hours"},
+        "duration_ms": 200000,
+    }
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        map_spotify_track(raw_track, None)
+    assert "Missing or invalid 'artists' field" in str(exc_info.value)
+
+
+def test_map_spotify_track_empty_artists() -> None:
+    """Test that map_spotify_track raises InvalidProviderResponse when 'artists' is empty."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    raw_track = {
+        "id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "name": "Blinding Lights",
+        "artists": [],
+        "album": {"name": "After Hours"},
+        "duration_ms": 200000,
+    }
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        map_spotify_track(raw_track, None)
+    # The 'artists' field being empty is caught by the "missing or invalid 'artists' field" check
+    assert "Missing or invalid 'artists' field" in str(exc_info.value)
+
+
+def test_map_spotify_track_missing_album() -> None:
+    """Test that map_spotify_track raises InvalidProviderResponse when 'album' is missing."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    raw_track = {
+        "id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "name": "Blinding Lights",
+        "artists": [{"name": "The Weeknd"}],
+        "duration_ms": 200000,
+    }
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        map_spotify_track(raw_track, None)
+    assert "Missing or invalid 'album' field" in str(exc_info.value)
+
+
+def test_map_spotify_track_missing_album_name() -> None:
+    """Test that map_spotify_track raises InvalidProviderResponse when 'album.name' is missing."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    raw_track = {
+        "id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "name": "Blinding Lights",
+        "artists": [{"name": "The Weeknd"}],
+        "album": {"name": ""},
+        "duration_ms": 200000,
+    }
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        map_spotify_track(raw_track, None)
+    assert "Missing or invalid 'album.name' field" in str(exc_info.value)
+
+
+def test_map_spotify_track_missing_duration() -> None:
+    """Test that map_spotify_track raises InvalidProviderResponse when 'duration_ms' is missing."""
+    from playlist_bridge.providers.spotify import map_spotify_track
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    raw_track = {
+        "id": "6rqhFgbbKwnb9MLmUQDhG6",
+        "uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+        "name": "Blinding Lights",
+        "artists": [{"name": "The Weeknd"}],
+        "album": {"name": "After Hours"},
+    }
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        map_spotify_track(raw_track, None)
+    assert "Missing or invalid 'duration_ms' field" in str(exc_info.value)
+
+
+def test_create_spotify_playlist_success() -> None:
+    """Test that create_spotify_playlist returns a DestinationPlaylist on success."""
+    from playlist_bridge.providers.spotify import create_spotify_playlist
+    from playlist_bridge.domain.models import DestinationPlaylist
+
+    # Create a mock Spotipy client
+    mock_client = MagicMock()
+    mock_playlist = {
+        "id": "test_playlist_123",
+        "name": "Test Playlist",
+        "owner": {"id": "test_user_123"},
+        "snapshot_id": "snapshot_123",
+        "external_urls": {"spotify": "https://open.spotify.com/playlist/test_playlist_123"},
+        "tracks": {"total": 0},
+        "collaborative": False,
+    }
+    mock_client.user_playlist_create.return_value = mock_playlist
+
+    result = create_spotify_playlist(
+        client=mock_client,
+        owner_id="test_user_123",
+        name="Test Playlist",
+        description="Test description",
+        public=True,
+    )
+
+    # Verify the result is a DestinationPlaylist with correct values
+    assert isinstance(result, DestinationPlaylist)
+    assert result.playlist_id == "test_playlist_123"
+    assert result.name == "Test Playlist"
+    assert result.owner_id == "test_user_123"
+    assert result.public is True
+    assert result.description == "Test description"
+    assert result.snapshot_id == "snapshot_123"
+    assert result.external_url == "https://open.spotify.com/playlist/test_playlist_123"
+    assert result.track_count == 0
+    assert result.collaborative is False
+
+    # Verify the client was called correctly
+    mock_client.user_playlist_create.assert_called_once_with(
+        user="test_user_123",
+        name="Test Playlist",
+        public=True,
+        description="Test description",
+    )
+
+
+def test_create_spotify_playlist_missing_id() -> None:
+    """Test that create_spotify_playlist raises InvalidProviderResponse when playlist has no id."""
+    from playlist_bridge.providers.spotify import create_spotify_playlist
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    mock_client = MagicMock()
+    mock_client.user_playlist_create.return_value = {}
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        create_spotify_playlist(
+            client=mock_client,
+            owner_id="test_user",
+            name="Test",
+            description="",
+            public=False,
+        )
+    assert "without an 'id' field" in str(exc_info.value)
+
+
+def test_create_spotify_playlist_null_response() -> None:
+    """Test that create_spotify_playlist raises InvalidProviderResponse when response is None."""
+    from playlist_bridge.providers.spotify import create_spotify_playlist
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    mock_client = MagicMock()
+    mock_client.user_playlist_create.return_value = None
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        create_spotify_playlist(
+            client=mock_client,
+            owner_id="test_user",
+            name="Test",
+            description="",
+            public=False,
+        )
+    assert "null response" in str(exc_info.value)
+
+
+def test_create_spotify_playlist_missing_name_fallback() -> None:
+    """Test that create_spotify_playlist falls back to provided name when response has no name."""
+    from playlist_bridge.providers.spotify import create_spotify_playlist
+    from playlist_bridge.domain.models import DestinationPlaylist
+
+    mock_client = MagicMock()
+    mock_playlist = {
+        "id": "test_playlist_123",
+        "owner": {"id": "test_user_123"},
+    }
+    mock_client.user_playlist_create.return_value = mock_playlist
+
+    result = create_spotify_playlist(
+        client=mock_client,
+        owner_id="test_user",
+        name="Provided Name",
+        description="",
+        public=False,
+    )
+
+    # Should use the provided name as fallback
+    assert result.name == "Provided Name"

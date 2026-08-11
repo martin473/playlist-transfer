@@ -1,8 +1,10 @@
 """Spotify provider utilities."""
 
-from typing import Protocol, Sequence, List
+from typing import Protocol, List, TypeAlias, Any
+from collections.abc import Sequence, Mapping
 
-from playlist_bridge.domain.models import AccountProfile, SpotifyCandidate, PlaylistReference
+from playlist_bridge.domain.models import AccountProfile, SpotifyCandidate, PlaylistReference, DestinationPlaylist
+from spotipy import Spotify
 from spotipy.exceptions import SpotifyException
 
 from playlist_bridge.providers.errors import (
@@ -16,6 +18,57 @@ from playlist_bridge.providers.errors import (
     ProviderError,
 )
 from playlist_bridge.jobs.cancellation import CancellationToken
+
+# ProviderIdentity is the identity information returned by Spotify
+# It contains the provider user ID and display name
+ProviderIdentity: TypeAlias = AccountProfile
+
+
+def get_spotify_identity(client: Spotify) -> ProviderIdentity:
+    """Get the authenticated Spotify user's identity.
+
+    Args:
+        client: An authenticated Spotipy client instance.
+
+    Returns:
+        ProviderIdentity containing the provider user ID and display name.
+        If the display name is missing or empty, falls back to the user ID.
+
+    Raises:
+        AuthenticationRequired: If the user is not authenticated with Spotify.
+        PermissionDenied: If the user lacks permission to view their profile.
+        ProviderNotFound: If the Spotify API endpoint is not available.
+        RateLimited: If the Spotify API rate limit has been exceeded.
+        InvalidProviderResponse: If the provider returns malformed data.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+    """
+    try:
+        user_info = client.me()
+        if user_info is None:
+            raise InvalidProviderResponse(
+                "spotify",
+                "get_spotify_identity",
+                "Spotify returned null response for user identity"
+            )
+        user_id = user_info.get("id", "")
+        if not user_id:
+            raise InvalidProviderResponse(
+                "spotify",
+                "get_spotify_identity",
+                "Spotify returned user identity without an 'id' field"
+            )
+        display_name = user_info.get("display_name")
+        # Map absent display name to a safe fallback (user ID)
+        if display_name is None or display_name == "":
+            display_name = user_id
+        return AccountProfile(
+            profile_name="",  # Profile name is not known from the identity endpoint alone
+            service="spotify",
+            provider_user_id=user_id,
+            display_name=display_name,
+        )
+    except SpotifyException as e:
+        raise map_spotify_error(e, "get_spotify_identity")
 
 
 def map_spotify_error(error: SpotifyException, operation: str) -> ProviderError:
@@ -759,6 +812,142 @@ class AuthenticatedSpotifyAdapter:
             raise map_spotify_error(e, "user_playlists")
 
 
+def map_spotify_track(raw: Mapping[str, Any], market: str | None) -> SpotifyCandidate:
+    """Convert a raw Spotify track object into a SpotifyCandidate.
+
+    Args:
+        raw: Raw Spotify track object from the API (a dict/Mapping).
+        market: ISO 3166-1 alpha-2 market code for region-specific availability.
+            If None, availability information is not included.
+
+    Returns:
+        SpotifyCandidate with all required fields populated.
+
+    Raises:
+        InvalidProviderResponse: If the raw track object is malformed and
+            missing required fields (track_id, name, artists, album, duration_ms).
+
+    The function extracts:
+        - track_id: From "id" field
+        - uri: From "uri" field
+        - title: From "name" field
+        - artist_names: From "artists" array, extracting each artist's "name"
+        - album: From "album.name"
+        - duration_seconds: From "duration_ms" (converted to seconds)
+        - explicit: From "explicit" boolean
+        - isrc: From "external_ids.isrc" (optional)
+        - market_availability: From "available_markets" (optional, if market is provided)
+    """
+    # Validate required fields
+    track_id = raw.get("id")
+    if not track_id or not isinstance(track_id, str):
+        raise InvalidProviderResponse(
+            "spotify",
+            "map_spotify_track",
+            "Missing or invalid 'id' field in Spotify track object"
+        )
+
+    uri = raw.get("uri", "")
+    if not uri or not isinstance(uri, str):
+        raise InvalidProviderResponse(
+            "spotify",
+            "map_spotify_track",
+            "Missing or invalid 'uri' field in Spotify track object"
+        )
+
+    title = raw.get("name", "")
+    if not title or not isinstance(title, str):
+        raise InvalidProviderResponse(
+            "spotify",
+            "map_spotify_track",
+            "Missing or invalid 'name' field in Spotify track object"
+        )
+
+    # Extract artist names
+    artists = raw.get("artists", [])
+    if not artists or not isinstance(artists, list):
+        raise InvalidProviderResponse(
+            "spotify",
+            "map_spotify_track",
+            "Missing or invalid 'artists' field in Spotify track object"
+        )
+
+    artist_names: list[str] = []
+    for artist in artists:
+        if artist and isinstance(artist, dict):
+            name = artist.get("name", "")
+            if name and isinstance(name, str):
+                artist_names.append(name)
+
+    if not artist_names:
+        raise InvalidProviderResponse(
+            "spotify",
+            "map_spotify_track",
+            "No valid artist names found in Spotify track object"
+        )
+
+    # Extract album name
+    album = raw.get("album", {})
+    if not album or not isinstance(album, dict):
+        raise InvalidProviderResponse(
+            "spotify",
+            "map_spotify_track",
+            "Missing or invalid 'album' field in Spotify track object"
+        )
+
+    album_name = album.get("name", "")
+    if not album_name or not isinstance(album_name, str):
+        raise InvalidProviderResponse(
+            "spotify",
+            "map_spotify_track",
+            "Missing or invalid 'album.name' field in Spotify track object"
+        )
+
+    # Extract duration
+    duration_ms = raw.get("duration_ms", 0)
+    if not isinstance(duration_ms, (int, float)) or duration_ms <= 0:
+        raise InvalidProviderResponse(
+            "spotify",
+            "map_spotify_track",
+            "Missing or invalid 'duration_ms' field in Spotify track object"
+        )
+    duration_seconds = int(duration_ms // 1000)
+
+    # Extract explicit flag
+    explicit = raw.get("explicit", False)
+    if not isinstance(explicit, bool):
+        explicit = False
+
+    # Extract ISRC (optional)
+    isrc = None
+    external_ids = raw.get("external_ids", {})
+    if external_ids and isinstance(external_ids, dict):
+        isrc_val = external_ids.get("isrc")
+        if isrc_val and isinstance(isrc_val, str):
+            isrc = isrc_val
+
+    # Extract market availability (optional)
+    market_availability = None
+    if market is not None:
+        available_markets = raw.get("available_markets")
+        if available_markets and isinstance(available_markets, list):
+            market_availability = [
+                m for m in available_markets if isinstance(m, str)
+            ]
+
+    return SpotifyCandidate(
+        track_id=track_id,
+        uri=uri,
+        title=title,
+        artist_names=artist_names,
+        album=album_name,
+        duration_seconds=duration_seconds,
+        explicit=explicit,
+        isrc=isrc,
+        market_availability=market_availability,
+    )
+
+
 def chunk_uris(uris: Sequence[str], batch_size: int = 100) -> list[tuple[str, ...]]:
     """Split an ordered URI sequence into batches no larger than batch_size.
 
@@ -777,3 +966,267 @@ def chunk_uris(uris: Sequence[str], batch_size: int = 100) -> list[tuple[str, ..
 
     # Ensure we always return tuples for immutability
     return [tuple(uris[i : i + batch_size]) for i in range(0, len(uris), batch_size)]
+
+
+def search_spotify_query(
+    client: Spotify,
+    query: str,
+    market: str | None,
+    limit: int,
+) -> list[SpotifyCandidate]:
+    """Search for tracks on Spotify with market filtering.
+
+    This function searches only track items for one query and market,
+    requesting exactly the specified limit of candidates.
+
+    Args:
+        client: Authenticated Spotify client.
+        query: Search query string (track title, artist, album, etc.).
+        market: ISO 3166-1 alpha-2 market code for region-specific results.
+            If None, no market filtering is applied.
+        limit: Maximum number of results to return.
+
+    Returns:
+        List of SpotifyCandidate objects matching the search query.
+        May be empty if no matches are found.
+
+    Raises:
+        AuthenticationRequired: If the user is not authenticated with Spotify.
+        PermissionDenied: If the user lacks permission to search.
+        ProviderNotFound: If the Spotify API endpoint is not available.
+        RateLimited: If the Spotify API rate limit has been exceeded.
+        InvalidProviderResponse: If the provider returns malformed data.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+    """
+    try:
+        results = client.search(q=query, type="track", market=market, limit=limit)
+        if results is None:
+            return []
+        tracks = results.get("tracks", {})
+        items = tracks.get("items", [])
+        candidates: list[SpotifyCandidate] = []
+        for item in items:
+            if item is None:
+                continue
+            track_id = item.get("id", "")
+            # Skip items with empty track_id (required field)
+            if not track_id:
+                continue
+            uri = item.get("uri", "")
+            name = item.get("name", "")
+            artists = item.get("artists", [])
+            artist_names = [a.get("name", "") for a in artists if a]
+            # Skip items with no artist names (required field)
+            if not artist_names:
+                continue
+            album = item.get("album", {})
+            album_name = album.get("name", "") if album else ""
+            # Skip items with empty album name (required field)
+            if not album_name:
+                continue
+            duration_ms = item.get("duration_ms", 0)
+            duration_seconds = duration_ms // 1000
+            explicit = item.get("explicit", False)
+            isrc = None
+            external_ids = item.get("external_ids", {})
+            if external_ids:
+                isrc = external_ids.get("isrc")
+            candidates.append(
+                SpotifyCandidate(
+                    track_id=track_id,
+                    uri=uri,
+                    title=name,
+                    artist_names=artist_names,
+                    album=album_name,
+                    duration_seconds=duration_seconds,
+                    explicit=explicit,
+                    isrc=isrc,
+                )
+            )
+        return candidates
+    except SpotifyException as e:
+        raise map_spotify_error(e, "search_spotify_query")
+
+
+def read_spotify_playlist_items(
+    client: Spotify,
+    playlist_id: str,
+    cancel: CancellationToken,
+) -> list[str | None]:
+    """Paginate track items and return ordered Spotify URIs plus unavailable/null positions.
+
+    Fetches all items from a Spotify playlist by paginating through all pages.
+    Returns a list where each entry corresponds to a position in the playlist:
+    - For available tracks: the Spotify URI (string)
+    - For unavailable (local/deleted) tracks: None
+
+    The order of the returned list matches the playlist order.
+
+    Args:
+        client: An authenticated Spotipy client instance.
+        playlist_id: The Spotify playlist ID to read items from.
+        cancel: CancellationToken to check for cancellation requests.
+
+    Returns:
+        List of str or None values representing each playlist position.
+        Available tracks are represented by their Spotify URI string.
+        Unavailable or deleted tracks are represented by None.
+
+    Raises:
+        AuthenticationRequired: If the user is not authenticated with Spotify.
+        PermissionDenied: If the user lacks permission to view the playlist.
+        ProviderNotFound: If the Spotify API endpoint is not available.
+        RateLimited: If the Spotify API rate limit has been exceeded.
+        InvalidProviderResponse: If the provider returns malformed data.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+        CancellationRequested: If the operation is cancelled via the token.
+    """
+    cancel.raise_if_cancelled()
+
+    uris: list[str | None] = []
+    limit = 100
+    offset = 0
+
+    try:
+        while True:
+            cancel.raise_if_cancelled()
+
+            results = client.playlist_items(
+                playlist_id=playlist_id,
+                limit=limit,
+                offset=offset,
+            )
+
+            if results is None:
+                break
+
+            items = results.get("items", [])
+            if not items:
+                break
+
+            for item in items:
+                cancel.raise_if_cancelled()
+
+                if item is None:
+                    # This shouldn't happen with Spotify's API, but guard against it
+                    uris.append(None)
+                    continue
+
+                track = item.get("track")
+                if track is None:
+                    # Track is unavailable or deleted
+                    uris.append(None)
+                    continue
+
+                # For local tracks, track.get("id") may be None, but we want the URI
+                # Spotify returns None for id, but we still want to capture the URI if available
+                track_uri = track.get("uri")
+                if track_uri:
+                    uris.append(track_uri)
+                else:
+                    # Track exists but has no URI (shouldn't happen with valid tracks)
+                    uris.append(None)
+
+            # Check if we've reached the end
+            total = results.get("total", 0)
+            offset += len(items)
+            if offset >= total or len(items) < limit:
+                break
+
+        return uris
+
+    except SpotifyException as e:
+        raise map_spotify_error(e, "read_spotify_playlist_items")
+
+
+def create_spotify_playlist(
+    client: Spotify,
+    owner_id: str,
+    name: str,
+    description: str,
+    public: bool,
+) -> DestinationPlaylist:
+    """Create a playlist for the authenticated user with name, description, and public/private value.
+
+    This function creates a new playlist on Spotify using the provided authenticated client.
+    It returns a provider-neutral DestinationPlaylist model containing the playlist details.
+
+    Args:
+        client: An authenticated Spotipy client instance.
+        owner_id: The owner ID (user ID) of the playlist creator.
+        name: The name of the playlist to create.
+        description: The description of the playlist.
+        public: Whether the playlist should be public (True) or private (False).
+
+    Returns:
+        DestinationPlaylist containing the created playlist's details.
+
+    Raises:
+        AuthenticationRequired: If the user is not authenticated with Spotify.
+        PermissionDenied: If the user lacks permission to create playlists.
+        ProviderNotFound: If the Spotify API endpoint is not available.
+        RateLimited: If the Spotify API rate limit has been exceeded.
+        InvalidProviderResponse: If the provider returns malformed data.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+    """
+    try:
+        # Create the playlist using the Spotipy client
+        playlist = client.user_playlist_create(
+            user=owner_id,
+            name=name,
+            public=public,
+            description=description,
+        )
+
+        if playlist is None:
+            raise InvalidProviderResponse(
+                "spotify",
+                "create_spotify_playlist",
+                "Spotify returned null response for playlist creation"
+            )
+
+        # Extract required fields from the response
+        playlist_id = playlist.get("id", "")
+        if not playlist_id:
+            raise InvalidProviderResponse(
+                "spotify",
+                "create_spotify_playlist",
+                "Spotify returned playlist without an 'id' field"
+            )
+
+        playlist_name = playlist.get("name", name)
+        if not playlist_name:
+            raise InvalidProviderResponse(
+                "spotify",
+                "create_spotify_playlist",
+                "Spotify returned playlist without a 'name' field"
+            )
+
+        owner_info = playlist.get("owner", {})
+        owner = owner_info.get("id", owner_id) if owner_info else owner_id
+
+        # Extract optional fields
+        snapshot_id = playlist.get("snapshot_id")
+        external_urls = playlist.get("external_urls", {})
+        external_url = external_urls.get("spotify") if external_urls else None
+
+        # Extract track count (if available in the response)
+        track_count = playlist.get("tracks", {}).get("total", 0) if "tracks" in playlist else 0
+
+        # Determine if collaborative (Spotify API may not return this in create response)
+        collaborative = playlist.get("collaborative", False)
+
+        return DestinationPlaylist(
+            playlist_id=playlist_id,
+            name=playlist_name,
+            owner_id=owner,
+            public=public,
+            collaborative=collaborative,
+            description=description or None,
+            snapshot_id=snapshot_id,
+            external_url=external_url,
+            track_count=track_count,
+        )
+
+    except SpotifyException as e:
+        raise map_spotify_error(e, "create_spotify_playlist")
