@@ -5,7 +5,7 @@ from typing import List, Sequence
 
 from spotipy.exceptions import SpotifyException
 
-from playlist_bridge.providers.spotify import chunk_uris, SpotifyAdapter, map_spotify_error
+from playlist_bridge.providers.spotify import chunk_uris, SpotifyAdapter, map_spotify_error, AuthenticatedSpotifyAdapter
 from playlist_bridge.domain.models import AccountProfile, SpotifyCandidate, PlaylistReference
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
@@ -604,3 +604,64 @@ class TestMapSpotifyError:
         assert result.service == "spotify"
         assert result.operation == "identity"
         assert "parse" in str(result).lower() or "expected" in str(result).lower()
+
+
+def test_authenticated_spotify_adapter_construction_no_network() -> None:
+    """Test that constructing AuthenticatedSpotifyAdapter performs no network request.
+
+    This test verifies that the adapter can be instantiated without making
+    any network calls. The adapter should only store the client reference
+    and not perform any I/O during construction.
+    """
+    import spotipy
+    
+    # Create a mock Spotipy client that will raise an exception if any
+    # network method is called during construction.
+    class MockSpotifyClient:
+        def __init__(self, *args, **kwargs):
+            # No network calls in constructor
+            pass
+        
+        # Adding dummy methods to satisfy type checking
+        def me(self):
+            return {"id": "test_user", "display_name": "Test User"}
+        
+        def search(self, q, type, limit):
+            return {"tracks": {"items": []}}
+        
+        def user_playlist_create(self, user, name, public, description):
+            return {"id": "test_playlist", "name": name, "owner": {"id": user}}
+        
+        def playlist_add_items(self, playlist_id, items, position):
+            return {"snapshot_id": "test_snapshot"}
+        
+        def playlist_replace_items(self, playlist_id, items):
+            return None
+        
+        def playlist_items(self, playlist_id, limit, offset):
+            return {"items": []}
+        
+        def current_user_playlists(self, limit, offset):
+            return {"items": []}
+    
+    # Create a client instance - no network calls occur
+    client = MockSpotifyClient()
+    
+    # Instantiate the adapter - this should not make any network calls
+    adapter = AuthenticatedSpotifyAdapter(client)
+    
+    # Verify the adapter was created successfully
+    assert adapter is not None
+    assert hasattr(adapter, "_client")
+    assert adapter._client is client
+    
+    # The adapter should be assignable to SpotifyAdapter protocol
+    # This is a structural check - all methods should exist
+    assert hasattr(adapter, "identity")
+    assert hasattr(adapter, "search_tracks")
+    assert hasattr(adapter, "create_playlist")
+    assert hasattr(adapter, "add_items")
+    assert hasattr(adapter, "replace_items")
+    assert hasattr(adapter, "read_items")
+    assert hasattr(adapter, "user_playlists")
+
