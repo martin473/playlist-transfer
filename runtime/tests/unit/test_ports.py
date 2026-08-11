@@ -381,3 +381,410 @@ class TestErrorTypes:
         """Test IntegrityError initialization."""
         err = IntegrityError("UNIQUE constraint failed")
         assert str(err) == "UNIQUE constraint failed"
+
+
+# ============================================================================
+# Tests for repository protocols
+# ============================================================================
+
+
+class TestRepositoryProtocols:
+    """Test that repository protocols are properly defined."""
+
+    def test_job_repository_protocol_exists(self) -> None:
+        """Test that JobRepository protocol is defined."""
+        from playlist_bridge.ports import JobRepository
+        # Protocol should be a class that can be used for type checking
+        assert isinstance(JobRepository, type)
+        # Check that it's a Protocol subclass
+        assert issubclass(JobRepository, Protocol)
+
+    def test_source_track_repository_protocol_exists(self) -> None:
+        """Test that SourceTrackRepository protocol is defined."""
+        from playlist_bridge.ports import SourceTrackRepository
+        assert isinstance(SourceTrackRepository, type)
+        assert issubclass(SourceTrackRepository, Protocol)
+
+    def test_match_decision_repository_protocol_exists(self) -> None:
+        """Test that MatchDecisionRepository protocol is defined."""
+        from playlist_bridge.ports import MatchDecisionRepository
+        assert isinstance(MatchDecisionRepository, type)
+        assert issubclass(MatchDecisionRepository, Protocol)
+
+    def test_match_cache_repository_protocol_exists(self) -> None:
+        """Test that MatchCacheRepository protocol is defined."""
+        from playlist_bridge.ports import MatchCacheRepository
+        assert isinstance(MatchCacheRepository, type)
+        assert issubclass(MatchCacheRepository, Protocol)
+
+    def test_manual_correction_repository_protocol_exists(self) -> None:
+        """Test that ManualCorrectionRepository protocol is defined."""
+        from playlist_bridge.ports import ManualCorrectionRepository
+        assert isinstance(ManualCorrectionRepository, type)
+        assert issubclass(ManualCorrectionRepository, Protocol)
+
+    def test_clock_type_alias_exists(self) -> None:
+        """Test that Clock type alias is defined."""
+        from playlist_bridge.ports import Clock
+        # Clock is a Callable[[], datetime]
+        from typing import Callable
+        from datetime import datetime
+        assert isinstance(Clock, type) or Clock is Callable
+        # Check that it's a callable type hint
+        assert hasattr(Clock, "__origin__") or Clock is Callable
+
+    def test_report_path_factory_type_alias_exists(self) -> None:
+        """Test that ReportPathFactory type alias is defined."""
+        from playlist_bridge.ports import ReportPathFactory
+        from typing import Callable
+        from pathlib import Path
+        assert hasattr(ReportPathFactory, "__origin__") or ReportPathFactory is Callable
+
+
+# ============================================================================
+# Tests for dependency container classes
+# ============================================================================
+
+
+class TestRunnerRepositories:
+    """Test RunnerRepositories dependency container."""
+
+    def test_initialization_with_valid_repositories(self) -> None:
+        """Test successful initialization with valid repositories."""
+        from playlist_bridge.ports import (
+            JobRepository,
+            SourceTrackRepository,
+            MatchDecisionRepository,
+            RunnerRepositories,
+        )
+
+        # Create fake repository implementations
+        class FakeJobRepository:
+            pass
+
+        class FakeTrackRepository:
+            pass
+
+        class FakeDecisionRepository:
+            pass
+
+        jobs = FakeJobRepository()
+        tracks = FakeTrackRepository()
+        decisions = FakeDecisionRepository()
+
+        container = RunnerRepositories(
+            jobs=jobs,  # type: ignore[arg-type]
+            tracks=tracks,  # type: ignore[arg-type]
+            decisions=decisions,  # type: ignore[arg-type]
+        )
+
+        assert container.jobs is jobs
+        assert container.tracks is tracks
+        assert container.decisions is decisions
+
+    def test_initialization_raises_value_error_for_none_jobs(self) -> None:
+        """Test that ValueError is raised when jobs is None."""
+        from playlist_bridge.ports import (
+            SourceTrackRepository,
+            MatchDecisionRepository,
+            RunnerRepositories,
+        )
+
+        with pytest.raises(ValueError, match="jobs repository cannot be None"):
+            RunnerRepositories(
+                jobs=None,  # type: ignore[arg-type]
+                tracks=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+            )
+
+    def test_initialization_raises_value_error_for_none_tracks(self) -> None:
+        """Test that ValueError is raised when tracks is None."""
+        from playlist_bridge.ports import (
+            JobRepository,
+            MatchDecisionRepository,
+            RunnerRepositories,
+        )
+
+        with pytest.raises(ValueError, match="tracks repository cannot be None"):
+            RunnerRepositories(
+                jobs=None,  # type: ignore[arg-type]
+                tracks=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+            )
+
+    def test_initialization_raises_value_error_for_none_decisions(self) -> None:
+        """Test that ValueError is raised when decisions is None."""
+        from playlist_bridge.ports import (
+            JobRepository,
+            SourceTrackRepository,
+            RunnerRepositories,
+        )
+
+        with pytest.raises(ValueError, match="decisions repository cannot be None"):
+            RunnerRepositories(
+                jobs=None,  # type: ignore[arg-type]
+                tracks=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+            )
+
+
+class TestReviewRepositories:
+    """Test ReviewRepositories dependency container."""
+
+    def test_initialization_with_valid_repositories(self) -> None:
+        """Test successful initialization with valid repositories."""
+        from playlist_bridge.ports import (
+            JobRepository,
+            SourceTrackRepository,
+            MatchDecisionRepository,
+            ManualCorrectionRepository,
+            ReviewRepositories,
+        )
+
+        class FakeJobRepository:
+            pass
+
+        class FakeTrackRepository:
+            pass
+
+        class FakeDecisionRepository:
+            pass
+
+        class FakeCorrectionRepository:
+            pass
+
+        jobs = FakeJobRepository()
+        tracks = FakeTrackRepository()
+        decisions = FakeDecisionRepository()
+        corrections = FakeCorrectionRepository()
+
+        container = ReviewRepositories(
+            jobs=jobs,  # type: ignore[arg-type]
+            tracks=tracks,  # type: ignore[arg-type]
+            decisions=decisions,  # type: ignore[arg-type]
+            corrections=corrections,  # type: ignore[arg-type]
+        )
+
+        assert container.jobs is jobs
+        assert container.tracks is tracks
+        assert container.decisions is decisions
+        assert container.corrections is corrections
+
+    def test_initialization_raises_value_error_for_none_corrections(self) -> None:
+        """Test that ValueError is raised when corrections is None."""
+        from playlist_bridge.ports import ReviewRepositories
+
+        with pytest.raises(ValueError, match="corrections repository cannot be None"):
+            ReviewRepositories(
+                jobs=None,  # type: ignore[arg-type]
+                tracks=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+                corrections=None,  # type: ignore[arg-type]
+            )
+
+
+class TestMatcherDependencies:
+    """Test MatcherDependencies dependency container."""
+
+    def test_initialization_with_valid_dependencies(self) -> None:
+        """Test successful initialization with valid dependencies."""
+        from playlist_bridge.ports import (
+            MatchDecisionRepository,
+            MatchCacheRepository,
+            ManualCorrectionRepository,
+            MatchingConfig,
+            Clock,
+            MatcherDependencies,
+        )
+
+        class FakeSpotify:
+            pass
+
+        class FakeDecisionRepository:
+            pass
+
+        class FakeCacheRepository:
+            pass
+
+        class FakeCorrectionRepository:
+            pass
+
+        spotify = FakeSpotify()
+        decisions = FakeDecisionRepository()
+        match_cache = FakeCacheRepository()
+        corrections = FakeCorrectionRepository()
+        config = MatchingConfig(
+            schema_version=1,
+            title_weight=0.3,
+            artist_weight=0.3,
+            duration_weight=0.2,
+            version_weight=0.1,
+            explicit_weight=0.1,
+            unwanted_version_penalty=0.5,
+            version_contradiction_penalty=0.5,
+            explicit_mismatch_penalty=0.5,
+            duration_full_credit_floor_ms=3000,
+            duration_full_credit_ratio=0.05,
+            duration_zero_credit_floor_ms=30000,
+            duration_zero_credit_ratio=0.5,
+            max_queries_per_track=5,
+            results_per_query=10,
+            max_unique_candidates=20,
+            cache_freshness_days=30,
+            policy_thresholds={
+                MatchPolicy.STRICT: {
+                    "min_score": 0.8,
+                    "title_threshold": 0.7,
+                    "artist_threshold": 0.7,
+                    "duration_threshold": 0.7,
+                },
+                MatchPolicy.BALANCED: {
+                    "min_score": 0.5,
+                    "title_threshold": 0.5,
+                    "artist_threshold": 0.5,
+                    "duration_threshold": 0.5,
+                },
+                MatchPolicy.LOOSE: {
+                    "min_score": 0.3,
+                    "title_threshold": 0.3,
+                    "artist_threshold": 0.3,
+                    "duration_threshold": 0.3,
+                },
+            },
+        )
+
+        def clock():
+            from datetime import datetime
+            return datetime.now()
+
+        container = MatcherDependencies(
+            spotify=spotify,  # type: ignore[arg-type]
+            decisions=decisions,  # type: ignore[arg-type]
+            match_cache=match_cache,  # type: ignore[arg-type]
+            corrections=corrections,  # type: ignore[arg-type]
+            matching_config=config,
+            clock=clock,
+        )
+
+        assert container.spotify is spotify
+        assert container.decisions is decisions
+        assert container.match_cache is match_cache
+        assert container.corrections is corrections
+        assert container.matching_config is config
+        assert container.clock is clock
+
+    def test_initialization_raises_value_error_for_none_spotify(self) -> None:
+        """Test that ValueError is raised when spotify is None."""
+        from playlist_bridge.ports import MatcherDependencies
+
+        with pytest.raises(ValueError, match="spotify adapter cannot be None"):
+            MatcherDependencies(
+                spotify=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+                match_cache=None,  # type: ignore[arg-type]
+                corrections=None,  # type: ignore[arg-type]
+                matching_config=None,  # type: ignore[arg-type]
+                clock=None,  # type: ignore[arg-type]
+            )
+
+    def test_initialization_raises_value_error_for_none_decisions(self) -> None:
+        """Test that ValueError is raised when decisions is None."""
+        from playlist_bridge.ports import MatcherDependencies
+
+        with pytest.raises(ValueError, match="decisions repository cannot be None"):
+            MatcherDependencies(
+                spotify=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+                match_cache=None,  # type: ignore[arg-type]
+                corrections=None,  # type: ignore[arg-type]
+                matching_config=None,  # type: ignore[arg-type]
+                clock=None,  # type: ignore[arg-type]
+            )
+
+    def test_initialization_raises_value_error_for_none_match_cache(self) -> None:
+        """Test that ValueError is raised when match_cache is None."""
+        from playlist_bridge.ports import MatcherDependencies
+
+        with pytest.raises(ValueError, match="match_cache repository cannot be None"):
+            MatcherDependencies(
+                spotify=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+                match_cache=None,  # type: ignore[arg-type]
+                corrections=None,  # type: ignore[arg-type]
+                matching_config=None,  # type: ignore[arg-type]
+                clock=None,  # type: ignore[arg-type]
+            )
+
+    def test_initialization_raises_value_error_for_none_corrections(self) -> None:
+        """Test that ValueError is raised when corrections is None."""
+        from playlist_bridge.ports import MatcherDependencies
+
+        with pytest.raises(ValueError, match="corrections repository cannot be None"):
+            MatcherDependencies(
+                spotify=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+                match_cache=None,  # type: ignore[arg-type]
+                corrections=None,  # type: ignore[arg-type]
+                matching_config=None,  # type: ignore[arg-type]
+                clock=None,  # type: ignore[arg-type]
+            )
+
+    def test_initialization_raises_value_error_for_none_matching_config(self) -> None:
+        """Test that ValueError is raised when matching_config is None."""
+        from playlist_bridge.ports import MatcherDependencies
+
+        with pytest.raises(ValueError, match="matching_config cannot be None"):
+            MatcherDependencies(
+                spotify=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+                match_cache=None,  # type: ignore[arg-type]
+                corrections=None,  # type: ignore[arg-type]
+                matching_config=None,  # type: ignore[arg-type]
+                clock=None,  # type: ignore[arg-type]
+            )
+
+    def test_initialization_raises_value_error_for_none_clock(self) -> None:
+        """Test that ValueError is raised when clock is None."""
+        from playlist_bridge.ports import MatcherDependencies
+
+        with pytest.raises(ValueError, match="clock cannot be None"):
+            MatcherDependencies(
+                spotify=None,  # type: ignore[arg-type]
+                decisions=None,  # type: ignore[arg-type]
+                match_cache=None,  # type: ignore[arg-type]
+                corrections=None,  # type: ignore[arg-type]
+                matching_config=None,  # type: ignore[arg-type]
+                clock=None,  # type: ignore[arg-type]
+            )
+
+
+# ============================================================================
+# Tests for error types
+# ============================================================================
+
+
+class TestRepositoryErrorTypes:
+    """Test repository error types."""
+
+    def test_job_not_found_error(self) -> None:
+        """Test JobNotFoundError initialization."""
+        from playlist_bridge.ports import JobNotFoundError
+        err = JobNotFoundError("job-123")
+        assert err.job_id == "job-123"
+        assert "Job not found: job-123" in str(err)
+
+    def test_job_lease_busy_error(self) -> None:
+        """Test JobLeaseBusyError initialization."""
+        from playlist_bridge.ports import JobLeaseBusyError
+        err = JobLeaseBusyError("job-123", "worker-456")
+        assert err.job_id == "job-123"
+        assert err.owner_id == "worker-456"
+        assert "job-123" in str(err)
+        assert "worker-456" in str(err)
+
+    def test_lease_lost_error(self) -> None:
+        """Test LeaseLostError initialization."""
+        from playlist_bridge.ports import LeaseLostError
+        err = LeaseLostError("job-123")
+        assert err.job_id == "job-123"
+        assert "Lease lost for job: job-123" in str(err)

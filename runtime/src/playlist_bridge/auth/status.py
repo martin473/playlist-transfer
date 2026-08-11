@@ -1,6 +1,6 @@
 """Authentication status aggregation for source and destination services."""
 
-from typing import Literal
+from typing import Literal, Sequence
 from pydantic import BaseModel
 
 from playlist_bridge.domain.enums import DestinationService, SourceService
@@ -18,9 +18,9 @@ class AuthStatus(BaseModel):
         profile_name: The name of the profile being checked.
         state: The authentication state - one of:
             - authenticated: Valid credentials exist and are usable.
-            - missing: No credentials found for this profile.
             - expired_refreshable: Token expired but refresh token available.
             - invalid: Credentials exist but are invalid/corrupted.
+            - missing: No credentials found for this profile.
         provider_user_id: The provider's user ID if authenticated, else None.
         display_name: The display name if authenticated, else None.
         safe_message: A user-safe message explaining the status, if any.
@@ -72,7 +72,6 @@ def probe_spotify_auth_status(
         RateLimited,
         TemporaryProviderFailure,
     )
-    import spotipy as spotipy_module
 
     # Check if credentials exist
     try:
@@ -122,18 +121,18 @@ def probe_spotify_auth_status(
                     safe_message="Spotify credentials missing access token",
                 )
 
-        # Create a Spotify client with the token
-        sp_client = spotipy_module.Spotify(auth=access_token)
+        # Create a minimal client with the token
+        import spotipy
+        client = spotipy.Spotify(auth=str(access_token))
 
-        # Probe the identity
-        profile = probe_spotify_identity(sp_client)
+        # Probe identity
+        profile = probe_spotify_identity(client, profile_name)
 
-        # Success - authenticated
         return AuthStatus(
             service=DestinationService.SPOTIFY,
             profile_name=profile_name,
             state="authenticated",
-            provider_user_id=profile.account_id,
+            provider_user_id=profile.provider_user_id,
             display_name=profile.display_name,
             safe_message="Spotify authentication successful",
         )
@@ -175,6 +174,23 @@ def probe_spotify_auth_status(
             )
 
     except Exception as e:
+        # Check if it's a spotipy OAuth error
+        if hasattr(e, "__class__") and "SpotifyOauthError" in str(e.__class__):
+            if has_refresh:
+                return AuthStatus(
+                    service=DestinationService.SPOTIFY,
+                    profile_name=profile_name,
+                    state="expired_refreshable",
+                    safe_message="Spotify token expired but refresh available",
+                )
+            else:
+                return AuthStatus(
+                    service=DestinationService.SPOTIFY,
+                    profile_name=profile_name,
+                    state="invalid",
+                    safe_message="Spotify authentication required",
+                )
+
         # Unexpected error - treat as invalid
         return AuthStatus(
             service=DestinationService.SPOTIFY,
@@ -209,11 +225,7 @@ def probe_youtube_auth_status(
     Raises:
         CredentialCorruptionError: If stored credentials are malformed.
     """
-    from playlist_bridge.auth.youtube import (
-        deserialize_google_credentials,
-        DEFAULT_YOUTUBE_SCOPES,
-        probe_youtube_identity,
-    )
+    from playlist_bridge.auth.youtube import probe_youtube_identity
     from playlist_bridge.providers.errors import (
         AuthenticationRequired,
         InvalidProviderResponse,
@@ -221,8 +233,6 @@ def probe_youtube_auth_status(
         RateLimited,
         TemporaryProviderFailure,
     )
-    from playlist_bridge.domain.enums import SourceService
-    import json
 
     # Check if credentials exist
     try:
@@ -251,57 +261,46 @@ def probe_youtube_auth_status(
     refresh_token = token_data.get("refresh_token")
     has_refresh = refresh_token is not None and str(refresh_token).strip() != ""
 
-    # Try to deserialize the credentials
-    try:
-        # Convert token_data to a serialized JSON string
-        serialized = json.dumps(dict(token_data))
-
-        # Deserialize Google credentials
-        creds = deserialize_google_credentials(serialized, DEFAULT_YOUTUBE_SCOPES)
-    except (ValueError, TypeError, json.JSONDecodeError) as e:
-        # Malformed credentials
-        return AuthStatus(
-            service=SourceService.YOUTUBE,
-            profile_name=profile_name,
-            state="invalid",
-            safe_message=f"YouTube credentials malformed: {e}",
-        )
-
-    # Check if we have a valid access token
-    if not creds.token:
-        # No access token - check if refreshable
-        if has_refresh:
-            return AuthStatus(
-                service=SourceService.YOUTUBE,
-                profile_name=profile_name,
-                state="expired_refreshable",
-                safe_message="YouTube access token missing but refresh token available",
-            )
-        else:
-            return AuthStatus(
-                service=SourceService.YOUTUBE,
-                profile_name=profile_name,
-                state="invalid",
-                safe_message="YouTube credentials missing access token",
-            )
-
     # Try to use the credentials to probe identity
     try:
-        from googleapiclient.discovery import build
-        from googleapiclient.errors import HttpError
+        # Get access token from token_data
+        access_token = token_data.get("access_token")
+        if not access_token:
+            # No access token - check if refreshable
+            if has_refresh:
+                return AuthStatus(
+                    service=SourceService.YOUTUBE,
+                    profile_name=profile_name,
+                    state="expired_refreshable",
+                    safe_message="YouTube access token missing but refresh token available",
+                )
+            else:
+                return AuthStatus(
+                    service=SourceService.YOUTUBE,
+                    profile_name=profile_name,
+                    state="invalid",
+                    safe_message="YouTube credentials missing access token",
+                )
 
-        # Build the YouTube client
-        client = build("youtube", "v3", credentials=creds)
+        # Build a credentials object for the youtube client
+        # The youtube module expects a Credentials object with token and refresh_token
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(
+            token=str(access_token),
+            refresh_token=str(refresh_token) if refresh_token else None,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=None,  # Not needed for probing with existing token
+            client_secret=None,
+        )
 
-        # Probe the identity
-        profile = probe_youtube_identity(client)
+        # Probe identity
+        profile = probe_youtube_identity(creds, profile_name)
 
-        # Success - authenticated
         return AuthStatus(
             service=SourceService.YOUTUBE,
             profile_name=profile_name,
             state="authenticated",
-            provider_user_id=profile.account_id,
+            provider_user_id=profile.provider_user_id,
             display_name=profile.display_name,
             safe_message="YouTube authentication successful",
         )
@@ -384,3 +383,68 @@ def probe_youtube_auth_status(
             state="invalid",
             safe_message=f"YouTube credential check failed: {e}",
         )
+
+
+def get_auth_status(
+    service: SourceService | DestinationService,
+    profile_name: str,
+    profiles: AccountProfileRepository,
+    credentials: CredentialStore,
+) -> AuthStatus:
+    """Get authentication status for a specific service and profile.
+
+    This is the public dispatcher that routes to the appropriate provider probe
+    based on the service type. It never opens a browser or performs interactive
+    authentication.
+
+    Args:
+        service: The service to check (SourceService or DestinationService).
+        profile_name: The name of the profile to check.
+        profiles: Repository for account profile data.
+        credentials: Credential store for OAuth token storage.
+
+    Returns:
+        AuthStatus: The authentication status for the given service and profile.
+
+    Raises:
+        CredentialCorruptionError: If stored credentials are malformed.
+    """
+    # Route to the appropriate probe function based on service type
+    if service == DestinationService.SPOTIFY:
+        return probe_spotify_auth_status(profile_name, profiles, credentials)
+    elif service == SourceService.YOUTUBE:
+        return probe_youtube_auth_status(profile_name, profiles, credentials)
+    else:
+        # This should never happen with the current enum types, but handle gracefully
+        raise ValueError(f"Unsupported service: {service}")
+
+
+def get_requested_auth_statuses(
+    requests: Sequence[tuple[SourceService | DestinationService, str]],
+    profiles: AccountProfileRepository,
+    credentials: CredentialStore,
+) -> list[AuthStatus]:
+    """Get authentication statuses for multiple requested service/profile pairs.
+
+    This function aggregates status checks for multiple service/profile
+    requests. It never opens a browser or performs interactive authentication.
+
+    Args:
+        requests: A sequence of (service, profile_name) tuples to check.
+        profiles: Repository for account profile data.
+        credentials: Credential store for OAuth token storage.
+
+    Returns:
+        list[AuthStatus]: A list of authentication statuses in the same order
+            as the requests. Each status corresponds to the request at the
+            same index.
+
+    Raises:
+        CredentialCorruptionError: If stored credentials are malformed for any
+            of the requests. Note that this may stop processing early.
+    """
+    results: list[AuthStatus] = []
+    for service, profile_name in requests:
+        status = get_auth_status(service, profile_name, profiles, credentials)
+        results.append(status)
+    return results

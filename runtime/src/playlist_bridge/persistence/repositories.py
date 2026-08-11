@@ -6,9 +6,9 @@ import secrets
 from typing import Any, Mapping, Sequence
 
 from sqlalchemy.exc import IntegrityError as SQLAlchemyIntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
-from playlist_bridge.domain.models import AccountProfile, MatchDecision, SourceTrack, TransferRequest
+from playlist_bridge.domain.models import AccountProfile, MatchDecision, MatchScore, SourceTrack, SpotifyCandidate, TransferRequest
 from playlist_bridge.domain.enums import DestinationService, JobStatus, SourceService, TrackStatus
 from playlist_bridge.persistence.models import AccountProfileRecord, JobRecord, ManualCorrection, MatchCacheEntry, MatchDecisionRecord, SourceTrackRecord
 from playlist_bridge.ports import IntegrityError
@@ -434,6 +434,77 @@ def acquire_job_lease(
     )
 
 
+def release_job_lease(
+    session: Session,
+    lease: JobLease,
+    now: datetime,
+) -> bool:
+    """Release a job lease.
+
+    This function clears the lease fields only for the current owner/token pair
+    and increments the row version in one transaction. Releasing an already
+    absent lease is an explicit no-op result (returns False). A different owner
+    cannot release the lease.
+
+    Args:
+        session: SQLAlchemy Session instance.
+        lease: The current JobLease object containing the lease details.
+        now: Current timestamp (timezone-aware).
+
+    Returns:
+        True if the lease was released (cleared), False if no lease was present.
+
+    Raises:
+        JobNotFoundError: If no job exists with the given lease.job_id.
+        LeaseLostError: If the lease is stale - owner mismatch, token mismatch,
+            or row version mismatch.
+
+    Side Effects:
+        sqlite_read, sqlite_write: Reads the job record, validates the lease,
+        clears the lease fields, and increments row_version. All changes are
+        committed atomically.
+    """
+    # Lock the row for update to prevent race conditions
+    job = session.query(JobRecord).filter_by(id=lease.job_id).with_for_update().first()
+    if job is None:
+        raise JobNotFoundError(lease.job_id)
+
+    # Check if there's no lease present
+    if job.lease_holder is None:
+        # Already released - this is an explicit no-op
+        return False
+
+    # Validate the lease matches the current state
+    # Check owner
+    if job.lease_holder != lease.owner_id:
+        raise LeaseLostError(lease.job_id)
+
+    # Check token hash
+    token_hash = _compute_token_hash(lease.token)
+    if job.lease_token_hash != token_hash:
+        raise LeaseLostError(lease.job_id)
+
+    # Check row version
+    if job.row_version != lease.row_version:
+        raise LeaseLostError(lease.job_id)
+
+    # Check if the lease has expired
+    if job.lease_expires_at is not None and job.lease_expires_at.replace(tzinfo=timezone.utc) < now.replace(tzinfo=timezone.utc):
+        raise LeaseLostError(lease.job_id)
+
+    # All checks passed - clear the lease fields
+    job.lease_holder = None
+    job.lease_expires_at = None
+    job.lease_heartbeat_at = None
+    job.lease_token_hash = None
+    job.row_version += 1
+    job.updated_at = now
+
+    session.commit()
+
+    return True
+
+
 def heartbeat_job_lease(
     session: Session,
     lease: JobLease,
@@ -563,18 +634,18 @@ def update_job_checkpoint(
         checkpoint_fields: Mapping of checkpoint field names to new values.
             Valid fields: "match_checkpoint", "write_checkpoint", "verification_checkpoint".
         updated_at: Updated timestamp (timezone-aware).
-        lease: JobLease instance containing lease holder, expiration, and heartbeat.
+        lease: JobLease instance containing lease holder, token, expiration, row version, and heartbeat.
 
     Returns:
         The updated JobRecord instance.
 
     Raises:
         JobNotFoundError: If no job exists with the given job_id.
-        LeaseLostError: If the lease is lost (stale takeover or expired).
+        LeaseLostError: If the lease is lost (stale takeover, expired, token mismatch, or row version mismatch).
 
     Side Effects:
         sqlite_read, sqlite_write: Updates the job's checkpoint fields, updated_at,
-        lease_holder, lease_expires_at, and lease_heartbeat_at.
+        lease_holder, lease_expires_at, lease_heartbeat_at, lease_token_hash, and row_version.
 
     Note:
         This function commits the transaction. Caller should wrap in a transaction
@@ -585,12 +656,21 @@ def update_job_checkpoint(
     if job is None:
         raise JobNotFoundError(job_id)
 
-    # Verify the lease is valid (compare-and-swap)
-    # Check if the lease holder matches and the lease hasn't expired
-    if job.lease_holder != lease.lease_holder:
+    # Verify the lease is valid using compare-and-swap pattern
+    # Check lease holder
+    if job.lease_holder != lease.owner_id:
         raise LeaseLostError(job_id)
 
-    # If there's an expiration time, check if it's still valid
+    # Check token hash
+    token_hash = _compute_token_hash(lease.token)
+    if job.lease_token_hash != token_hash:
+        raise LeaseLostError(job_id)
+
+    # Check row version
+    if job.row_version != lease.row_version:
+        raise LeaseLostError(job_id)
+
+    # Check if the lease has expired
     # Note: SQLite doesn't store timezone info, so the stored value is naive
     # We compare against a naive UTC datetime for consistency
     if job.lease_expires_at is not None and job.lease_expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
@@ -608,9 +688,14 @@ def update_job_checkpoint(
 
     # Update the timestamp and lease information
     job.updated_at = updated_at
-    job.lease_holder = lease.lease_holder
-    job.lease_expires_at = lease.lease_expires_at
+    job.lease_holder = lease.owner_id
+    job.lease_expires_at = lease.expires_at
     job.lease_heartbeat_at = lease.lease_heartbeat_at
+
+    # Generate a new token for the updated lease
+    new_token = _generate_lease_token()
+    new_token_hash = _compute_token_hash(new_token)
+    job.lease_token_hash = new_token_hash
 
     # Increment row version for optimistic locking
     job.row_version += 1
@@ -754,6 +839,23 @@ def upsert_match_decision(
         sqlite_write: Inserts or updates the match decision record.
         Commits the transaction.
     """
+    # Extract data from domain model
+    spotify_track_id = None
+    if decision.selected_candidate:
+        spotify_track_id = decision.selected_candidate.track_id
+
+    # Build score_json from decision
+    score_json: dict[str, Any] = {
+        "status": decision.status,
+        "reason": decision.reason,
+    }
+    if decision.score:
+        score_json["score_details"] = decision.score.model_dump()
+    if decision.selected_candidate:
+        score_json["candidate"] = decision.selected_candidate.model_dump()
+    if decision.ranked_alternatives:
+        score_json["alternatives"] = [alt.model_dump() for alt in decision.ranked_alternatives]
+
     # Check if a decision already exists for this job/source_item_id
     existing = session.query(MatchDecisionRecord).filter_by(
         job_id=job_id,
@@ -762,10 +864,10 @@ def upsert_match_decision(
 
     if existing:
         # Update existing record
-        existing.spotify_track_id = decision.selected_track_id
-        existing.score_json = decision.score_data
+        existing.spotify_track_id = spotify_track_id
+        existing.score_json = score_json
         existing.decision_status = decision.status
-        existing.reviewed = decision.reviewed
+        existing.reviewed = False  # Decision is not reviewed until explicitly reviewed
         # updated_at is automatically updated via onupdate
         session.commit()
         return existing
@@ -774,10 +876,10 @@ def upsert_match_decision(
         record = MatchDecisionRecord(
             job_id=job_id,
             source_item_id=source_item_id,
-            spotify_track_id=decision.selected_track_id,
-            score_json=decision.score_data,
+            spotify_track_id=spotify_track_id,
+            score_json=score_json,
             decision_status=decision.status,
-            reviewed=decision.reviewed,
+            reviewed=False,
         )
         try:
             session.add(record)
@@ -869,3 +971,296 @@ def resolve_correction_then_cache(session: Session, fingerprint: str) -> ManualC
 
     # Fall back to automatic cache
     return lookup_match_cache(session, fingerprint)
+
+
+# ============================================================================
+# Repository adapters
+# ============================================================================
+
+
+class SqlAlchemyMatchDecisionRepository:
+    """SQLAlchemy implementation of MatchDecisionRepository protocol.
+
+    This repository wraps the underlying SQLAlchemy session functions for
+    match decision persistence, providing a clean interface for domain code.
+
+    Attributes:
+        session_factory: A SQLAlchemy sessionmaker that creates Session objects.
+    """
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        """Initialize the repository with a session factory.
+
+        Args:
+            session_factory: A SQLAlchemy sessionmaker for creating sessions.
+        """
+        self._session_factory = session_factory
+
+    def upsert(self, job_id: str, decision: MatchDecision) -> MatchDecision:
+        """Insert or update a match decision for a job.
+
+        Args:
+            job_id: The unique identifier for the job.
+            decision: The MatchDecision instance to store.
+
+        Returns:
+            The stored MatchDecision instance.
+
+        Raises:
+            JobNotFoundError: If the job does not exist.
+            IntegrityError: If the upsert violates constraints.
+            ValueError: If decision is invalid.
+        """
+        # Validate inputs
+        if not job_id:
+            raise ValueError("job_id cannot be empty")
+        if not decision.source_item_id:
+            raise ValueError("decision.source_item_id cannot be empty")
+        if not decision.reason:
+            raise ValueError("decision.reason cannot be empty")
+
+        with self._session_factory() as session:
+            # Verify job exists
+            job = session.query(JobRecord).filter_by(id=job_id).first()
+            if job is None:
+                raise JobNotFoundError(job_id)
+
+            # Perform upsert
+            try:
+                record = upsert_match_decision(
+                    session,
+                    job_id,
+                    decision.source_item_id,
+                    decision,
+                )
+                # Return the domain model (the input decision is already a domain model)
+                # We return it as-is since the decision contains the data we stored
+                return decision
+            except SQLAlchemyIntegrityError as e:
+                session.rollback()
+                raise IntegrityError(f"Integrity constraint violated: {e}") from e
+
+    def unresolved(self, job_id: str) -> list[MatchDecision]:
+        """List unresolved match decisions for a job.
+
+        Returns decisions that are pending, matching, or in review.
+
+        Args:
+            job_id: The unique identifier for the job.
+
+        Returns:
+            A list of unresolved MatchDecision instances.
+            Empty list if all decisions are resolved.
+
+        Raises:
+            JobNotFoundError: If the job does not exist.
+        """
+        if not job_id:
+            raise ValueError("job_id cannot be empty")
+
+        with self._session_factory() as session:
+            # Verify job exists
+            job = session.query(JobRecord).filter_by(id=job_id).first()
+            if job is None:
+                raise JobNotFoundError(job_id)
+
+            # Get unresolved decisions (pending, matching, in_review)
+            unresolved_statuses = ["pending", "matching", "in_review"]
+            records = get_unresolved_decisions(
+                session,
+                job_id,
+                status_filter=unresolved_statuses,
+            )
+
+            # Convert to domain models
+            decisions = []
+            for record in records:
+                # Convert from database record to domain MatchDecision
+                # We need to reconstruct the domain model from the stored data
+                # The record has: source_item_id, spotify_track_id, score_json, decision_status, reviewed
+                # Map decision_status to MatchDecision status
+                if record.decision_status == "matched":
+                    status = "matched"
+                else:
+                    status = "unmatched"
+
+                # Reconstruct the SpotifyCandidate from the score_json if available
+                selected_candidate = None
+                score = None
+                if record.spotify_track_id and record.score_json:
+                    # Try to extract candidate info from score_json
+                    # The score_json should contain track data
+                    score_data = record.score_json
+                    if "candidate" in score_data:
+                        cand_data = score_data["candidate"]
+                        selected_candidate = SpotifyCandidate(
+                            track_id=cand_data.get("track_id", record.spotify_track_id),
+                            uri=cand_data.get("uri", f"spotify:track:{record.spotify_track_id}"),
+                            title=cand_data.get("title", ""),
+                            artist_names=cand_data.get("artist_names", []),
+                            album=cand_data.get("album", ""),
+                            duration_seconds=cand_data.get("duration_seconds", 0),
+                            explicit=cand_data.get("explicit", False),
+                            isrc=cand_data.get("isrc"),
+                            market_availability=cand_data.get("market_availability"),
+                        )
+                    # Reconstruct MatchScore from score_json
+                    if "score_details" in score_data:
+                        score_details = score_data["score_details"]
+                        from playlist_bridge.domain.models import MatchScore
+                        score = MatchScore(
+                            overall=score_details.get("overall", 0.0),
+                            title_similarity=score_details.get("title_similarity", 0.0),
+                            artist_similarity=score_details.get("artist_similarity", 0.0),
+                            duration_similarity=score_details.get("duration_similarity", 0.0),
+                        )
+                # For unmatched decisions, no selected_candidate or score
+                if status == "unmatched":
+                    selected_candidate = None
+                    score = None
+
+                decision = MatchDecision(
+                    source_item_id=record.source_item_id,
+                    status=status,
+                    selected_candidate=selected_candidate,
+                    ranked_alternatives=[],  # Not stored, we don't reconstruct alternatives currently
+                    score=score,
+                    reason=record.score_json.get("reason", "No reason provided") if record.score_json else "No reason provided",
+                )
+                decisions.append(decision)
+
+            return decisions
+
+
+class SqlAlchemyMatchCacheRepository:
+    """SQLAlchemy implementation of MatchCacheRepository protocol.
+
+    This repository wraps the underlying SQLAlchemy session functions for
+    match cache persistence, providing a clean interface for domain code.
+
+    Attributes:
+        session_factory: A SQLAlchemy sessionmaker that creates Session objects.
+    """
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        """Initialize the repository with a session factory.
+
+        Args:
+            session_factory: A SQLAlchemy sessionmaker for creating sessions.
+        """
+        self._session_factory = session_factory
+
+    def get(self, fingerprint: str) -> MatchCacheEntry | None:
+        """Retrieve a match cache entry by fingerprint.
+
+        Args:
+            fingerprint: The source track fingerprint.
+
+        Returns:
+            The MatchCacheEntry instance, or None if not found.
+
+        Raises:
+            ValueError: If fingerprint is empty.
+        """
+        if not fingerprint:
+            raise ValueError("fingerprint cannot be empty")
+
+        with self._session_factory() as session:
+            return lookup_match_cache(session, fingerprint)
+
+    def upsert(self, entry: MatchCacheEntry) -> MatchCacheEntry:
+        """Insert or update a match cache entry.
+
+        Args:
+            entry: The MatchCacheEntry instance to store.
+
+        Returns:
+            The stored MatchCacheEntry instance.
+
+        Raises:
+            IntegrityError: If the upsert violates constraints.
+            ValueError: If entry is invalid.
+        """
+        if entry is None:
+            raise ValueError("entry cannot be None")
+        if not entry.source_fingerprint:
+            raise ValueError("entry.source_fingerprint cannot be empty")
+        if not entry.spotify_track_id:
+            raise ValueError("entry.spotify_track_id cannot be empty")
+
+        with self._session_factory() as session:
+            try:
+                result = upsert_match_cache(session, entry)
+                return result
+            except SQLAlchemyIntegrityError as e:
+                session.rollback()
+                raise IntegrityError(f"Integrity constraint violated: {e}") from e
+
+
+class SqlAlchemyManualCorrectionRepository:
+    """SQLAlchemy implementation of ManualCorrectionRepository protocol.
+
+    This repository wraps the underlying SQLAlchemy session functions for
+    manual correction persistence, providing a clean interface for domain code.
+
+    Attributes:
+        session_factory: A SQLAlchemy sessionmaker that creates Session objects.
+    """
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        """Initialize the repository with a session factory.
+
+        Args:
+            session_factory: A SQLAlchemy sessionmaker for creating sessions.
+        """
+        self._session_factory = session_factory
+
+    def get(self, fingerprint: str) -> ManualCorrection | None:
+        """Retrieve a manual correction by fingerprint.
+
+        Args:
+            fingerprint: The source track fingerprint.
+
+        Returns:
+            The ManualCorrection instance, or None if not found.
+
+        Raises:
+            ValueError: If fingerprint is empty.
+        """
+        if not fingerprint:
+            raise ValueError("fingerprint cannot be empty")
+
+        with self._session_factory() as session:
+            return lookup_manual_correction(session, fingerprint)
+
+    def upsert(self, correction: ManualCorrection) -> ManualCorrection:
+        """Insert or update a manual correction.
+
+        Args:
+            correction: The ManualCorrection instance to store.
+
+        Returns:
+            The stored ManualCorrection instance.
+
+        Raises:
+            IntegrityError: If the upsert violates constraints.
+            ValueError: If correction is invalid.
+        """
+        if correction is None:
+            raise ValueError("correction cannot be None")
+        if not correction.source_fingerprint:
+            raise ValueError("correction.source_fingerprint cannot be empty")
+        # Either spotify_track_id or skip_reason must be provided, but not both
+        if not correction.spotify_track_id and not correction.skip_reason:
+            raise ValueError("correction must have either spotify_track_id or skip_reason")
+        if correction.spotify_track_id and correction.skip_reason:
+            raise ValueError("correction cannot have both spotify_track_id and skip_reason")
+
+        with self._session_factory() as session:
+            try:
+                result = upsert_manual_correction(session, correction)
+                return result
+            except SQLAlchemyIntegrityError as e:
+                session.rollback()
+                raise IntegrityError(f"Integrity constraint violated: {e}") from e
+

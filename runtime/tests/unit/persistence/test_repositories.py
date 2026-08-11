@@ -1,6 +1,8 @@
 """Unit tests for repository functions."""
 
 from datetime import datetime, timezone, timedelta
+import hashlib
+import secrets
 import uuid
 
 import pytest
@@ -17,6 +19,8 @@ from playlist_bridge.persistence.repositories import (
     JobLease,
     JobLeaseBusyError,
     LeaseLostError,
+    _compute_token_hash,
+    _generate_lease_token,
     acquire_job_lease,
     bulk_insert_source_tracks,
     create_job,
@@ -28,6 +32,7 @@ from playlist_bridge.persistence.repositories import (
     lookup_match_cache,
     lookup_manual_correction,
     record_job_error,
+    release_job_lease,
     resolve_correction_then_cache,
     update_job_checkpoint,
     update_job_state,
@@ -1518,21 +1523,31 @@ class TestUpdateJobCheckpoint:
         assert job.write_checkpoint == 0
         assert job.verification_checkpoint == 0
 
-        # Set up a lease
+        # Set up a lease with proper token and row version
         lease_holder = "worker-1"
+        token = secrets.token_hex(16)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         lease_expires_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=30)
         lease_heartbeat_at = datetime.now(timezone.utc).replace(microsecond=0)
-        lease = JobLease(
-            lease_holder=lease_holder,
-            lease_expires_at=lease_expires_at,
-            lease_heartbeat_at=lease_heartbeat_at,
-        )
+        row_version = 1
 
         # Set the lease on the job
         job.lease_holder = lease_holder
+        job.lease_token_hash = token_hash
         job.lease_expires_at = lease_expires_at
         job.lease_heartbeat_at = lease_heartbeat_at
+        job.row_version = row_version
         in_memory_session.commit()
+
+        # Create JobLease with matching values
+        lease = JobLease(
+            job_id=job_id,
+            owner_id=lease_holder,
+            token=token,
+            expires_at=lease_expires_at,
+            row_version=row_version,
+            lease_heartbeat_at=lease_heartbeat_at,
+        )
 
         # Update checkpoint fields
         updated_at = datetime.now(timezone.utc)
@@ -1558,7 +1573,10 @@ class TestUpdateJobCheckpoint:
         assert updated_job.lease_holder == lease_holder
         assert updated_job.lease_expires_at.replace(tzinfo=None) == lease_expires_at.replace(tzinfo=None)
         assert updated_job.lease_heartbeat_at.replace(tzinfo=None) == lease_heartbeat_at.replace(tzinfo=None)
-        assert updated_job.row_version == 2  # Incremented from 1
+        assert updated_job.row_version == row_version + 1  # Incremented from 1 to 2
+        # Token hash should be updated to a new value
+        assert updated_job.lease_token_hash is not None
+        assert updated_job.lease_token_hash != token_hash
 
         # Reload the job and verify the checkpoints persist
         reloaded_job = get_job(in_memory_session, job_id)
@@ -1589,21 +1607,31 @@ class TestUpdateJobCheckpoint:
         assert job.write_checkpoint == 0
         assert job.verification_checkpoint == 0
 
-        # Set up a lease
+        # Set up a lease with proper token and row version
         lease_holder = "worker-2"
+        token = secrets.token_hex(16)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         lease_expires_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=30)
         lease_heartbeat_at = datetime.now(timezone.utc).replace(microsecond=0)
-        lease = JobLease(
-            lease_holder=lease_holder,
-            lease_expires_at=lease_expires_at,
-            lease_heartbeat_at=lease_heartbeat_at,
-        )
+        row_version = 1
 
         # Set the lease on the job
         job.lease_holder = lease_holder
+        job.lease_token_hash = token_hash
         job.lease_expires_at = lease_expires_at
         job.lease_heartbeat_at = lease_heartbeat_at
+        job.row_version = row_version
         in_memory_session.commit()
+
+        # Create JobLease with matching values
+        lease = JobLease(
+            job_id=job_id,
+            owner_id=lease_holder,
+            token=token,
+            expires_at=lease_expires_at,
+            row_version=row_version,
+            lease_heartbeat_at=lease_heartbeat_at,
+        )
 
         # Update only one checkpoint field
         updated_at = datetime.now(timezone.utc)
@@ -1634,10 +1662,16 @@ class TestUpdateJobCheckpoint:
         """update_job_checkpoint raises JobNotFoundError when job doesn't exist."""
         non_existent_job_id = "non-existent-job-id"
         updated_at = datetime.now(timezone.utc)
+        token = secrets.token_hex(16)
+        lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        lease_heartbeat_at = datetime.now(timezone.utc)
         lease = JobLease(
-            lease_holder="worker-1",
-            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
-            lease_heartbeat_at=datetime.now(timezone.utc),
+            job_id=non_existent_job_id,
+            owner_id="worker-1",
+            token=token,
+            expires_at=lease_expires_at,
+            row_version=1,
+            lease_heartbeat_at=lease_heartbeat_at,
         )
 
         with pytest.raises(JobNotFoundError) as exc_info:
@@ -1670,16 +1704,27 @@ class TestUpdateJobCheckpoint:
             created_at=created_at,
         )
 
-        # Set a different lease holder
-        job.lease_holder = "worker-1"
-        job.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
-        job.lease_heartbeat_at = datetime.now(timezone.utc)
+        # Set a lease with proper token and row version
+        lease_holder = "worker-1"
+        token = secrets.token_hex(16)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        lease_heartbeat_at = datetime.now(timezone.utc)
+        row_version = 1
+        job.lease_holder = lease_holder
+        job.lease_token_hash = token_hash
+        job.lease_expires_at = lease_expires_at
+        job.lease_heartbeat_at = lease_heartbeat_at
+        job.row_version = row_version
         in_memory_session.commit()
 
         # Try to update with a different lease holder
         different_lease = JobLease(
-            lease_holder="worker-2",
-            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+            job_id=job_id,
+            owner_id="worker-2",
+            token=secrets.token_hex(16),
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+            row_version=row_version,
             lease_heartbeat_at=datetime.now(timezone.utc),
         )
 
@@ -1713,18 +1758,26 @@ class TestUpdateJobCheckpoint:
             created_at=created_at,
         )
 
-        # Set an expired lease
+        # Set an expired lease with proper token and row version
         lease_holder = "worker-1"
+        token = secrets.token_hex(16)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         expired_time = datetime.now(timezone.utc) - timedelta(seconds=1)
+        row_version = 1
         job.lease_holder = lease_holder
+        job.lease_token_hash = token_hash
         job.lease_expires_at = expired_time
         job.lease_heartbeat_at = expired_time - timedelta(seconds=5)
+        job.row_version = row_version
         in_memory_session.commit()
 
-        # Try to update with the same holder but expired
+        # Try to update with the same holder but expired lease
         lease = JobLease(
-            lease_holder=lease_holder,
-            lease_expires_at=expired_time,
+            job_id=job_id,
+            owner_id=lease_holder,
+            token=token,
+            expires_at=expired_time,
+            row_version=row_version,
             lease_heartbeat_at=expired_time - timedelta(seconds=5),
         )
 
@@ -1759,15 +1812,25 @@ class TestUpdateJobCheckpoint:
         )
 
         lease_holder = "worker-1"
+        token = secrets.token_hex(16)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        lease_heartbeat_at = datetime.now(timezone.utc)
+        row_version = 1
         job.lease_holder = lease_holder
-        job.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
-        job.lease_heartbeat_at = datetime.now(timezone.utc)
+        job.lease_token_hash = token_hash
+        job.lease_expires_at = lease_expires_at
+        job.lease_heartbeat_at = lease_heartbeat_at
+        job.row_version = row_version
         in_memory_session.commit()
 
         lease = JobLease(
-            lease_holder=lease_holder,
-            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
-            lease_heartbeat_at=datetime.now(timezone.utc),
+            job_id=job_id,
+            owner_id=lease_holder,
+            token=token,
+            expires_at=lease_expires_at,
+            row_version=row_version,
+            lease_heartbeat_at=lease_heartbeat_at,
         )
 
         # Try to update an invalid field
@@ -1784,6 +1847,114 @@ class TestUpdateJobCheckpoint:
         assert "match_checkpoint" in str(exc_info.value)
         assert "write_checkpoint" in str(exc_info.value)
         assert "verification_checkpoint" in str(exc_info.value)
+
+    def test_update_job_checkpoint_token_mismatch(self, in_memory_session: Session):
+        """update_job_checkpoint raises LeaseLostError when token hash doesn't match."""
+        # Create a job
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        job = create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+
+        # Set a lease with proper token and row version
+        lease_holder = "worker-1"
+        correct_token = secrets.token_hex(16)
+        correct_token_hash = hashlib.sha256(correct_token.encode("utf-8")).hexdigest()
+        lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        lease_heartbeat_at = datetime.now(timezone.utc)
+        row_version = 1
+        job.lease_holder = lease_holder
+        job.lease_token_hash = correct_token_hash
+        job.lease_expires_at = lease_expires_at
+        job.lease_heartbeat_at = lease_heartbeat_at
+        job.row_version = row_version
+        in_memory_session.commit()
+
+        # Try to update with a wrong token
+        wrong_lease = JobLease(
+            job_id=job_id,
+            owner_id=lease_holder,
+            token=secrets.token_hex(16),  # Different token
+            expires_at=lease_expires_at,
+            row_version=row_version,
+            lease_heartbeat_at=lease_heartbeat_at,
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            update_job_checkpoint(
+                session=in_memory_session,
+                job_id=job_id,
+                checkpoint_fields={"match_checkpoint": 10},
+                updated_at=datetime.now(timezone.utc),
+                lease=wrong_lease,
+            )
+
+        assert exc_info.value.job_id == job_id
+
+    def test_update_job_checkpoint_row_version_mismatch(self, in_memory_session: Session):
+        """update_job_checkpoint raises LeaseLostError when row version doesn't match."""
+        # Create a job
+        job_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        request = TransferRequest(
+            source_service="youtube",
+            source_playlist_id="youtube:playlist:source123",
+            destination_service="spotify",
+            destination_playlist_id="spotify:playlist:dest456",
+            transfer_mode=TransferMode.DRY_RUN,
+        )
+        job = create_job(
+            session=in_memory_session,
+            request=request,
+            job_id=job_id,
+            created_at=created_at,
+        )
+
+        # Set a lease with proper token and row version
+        lease_holder = "worker-1"
+        token = secrets.token_hex(16)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        lease_heartbeat_at = datetime.now(timezone.utc)
+        current_row_version = 1
+        job.lease_holder = lease_holder
+        job.lease_token_hash = token_hash
+        job.lease_expires_at = lease_expires_at
+        job.lease_heartbeat_at = lease_heartbeat_at
+        job.row_version = current_row_version
+        in_memory_session.commit()
+
+        # Try to update with a wrong row version
+        wrong_lease = JobLease(
+            job_id=job_id,
+            owner_id=lease_holder,
+            token=token,
+            expires_at=lease_expires_at,
+            row_version=999,  # Different row version
+            lease_heartbeat_at=lease_heartbeat_at,
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            update_job_checkpoint(
+                session=in_memory_session,
+                job_id=job_id,
+                checkpoint_fields={"match_checkpoint": 10},
+                updated_at=datetime.now(timezone.utc),
+                lease=wrong_lease,
+            )
+
+        assert exc_info.value.job_id == job_id
 
 
 class TestGetUnresolvedDecisions:
@@ -2970,3 +3141,415 @@ class TestHeartbeatJobLease:
             )
 
         assert exc_info.value.job_id == job_id
+
+
+class TestReleaseJobLease:
+    """Tests for release_job_lease function."""
+
+    def test_release_successful(self, in_memory_session: Session):
+        """Successful release clears the lease fields."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner_id = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # Acquire the lease
+        lease = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now1,
+            lease_duration,
+        )
+
+        # Verify the lease is set
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner_id
+        assert job.lease_expires_at is not None
+        assert job.lease_heartbeat_at is not None
+        assert job.lease_token_hash is not None
+        assert job.row_version == 2  # Initial row_version is 1, acquire increments to 2
+
+        # Release the lease
+        now2 = datetime(2024, 1, 1, 12, 30, 30, tzinfo=timezone.utc)
+        result = release_job_lease(in_memory_session, lease, now2)
+
+        assert result is True
+
+        # Verify the lease fields are cleared
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder is None
+        assert job.lease_expires_at is None
+        assert job.lease_heartbeat_at is None
+        assert job.lease_token_hash is None
+        assert job.row_version == 3  # Incremented by release
+        # Compare datetime values (SQLite may strip microseconds and timezone)
+        stored_updated = job.updated_at.replace(tzinfo=timezone.utc) if job.updated_at else None
+        expected_updated = now2.replace(microsecond=0)
+        assert stored_updated.replace(microsecond=0) == expected_updated
+
+    def test_release_no_lease_present_returns_false(self, in_memory_session: Session):
+        """Releasing an already absent lease is a no-op returning False."""
+        # Create a job with no lease
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        # Verify no lease is present
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder is None
+
+        # Try to release
+        now = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease = JobLease(
+            job_id=job_id,
+            owner_id="process-123",
+            token="some-token",
+            expires_at=now + timedelta(seconds=90),
+            row_version=1,
+            lease_heartbeat_at=now,
+        )
+
+        # Release should return False (no lease to release)
+        result = release_job_lease(in_memory_session, lease, now)
+        assert result is False
+
+        # Verify job still has no lease
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder is None
+
+    def test_release_fails_on_owner_mismatch(self, in_memory_session: Session):
+        """A different owner cannot release the lease."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner1 = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # Acquire the lease
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner1,
+            now1,
+            lease_duration,
+        )
+
+        # Try to release with a different owner
+        now2 = datetime(2024, 1, 1, 12, 30, 30, tzinfo=timezone.utc)
+        lease_wrong_owner = JobLease(
+            job_id=job_id,
+            owner_id="wrong-owner",
+            token=lease1.token,
+            expires_at=lease1.expires_at,
+            row_version=lease1.row_version,
+            lease_heartbeat_at=lease1.lease_heartbeat_at,
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            release_job_lease(in_memory_session, lease_wrong_owner, now2)
+
+        assert exc_info.value.job_id == job_id
+
+        # Verify the lease is still held by the original owner
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner1
+        assert job.lease_expires_at is not None
+
+    def test_release_fails_on_token_mismatch(self, in_memory_session: Session):
+        """Release fails when the token doesn't match the stored hash."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner_id = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # Acquire the lease
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now1,
+            lease_duration,
+        )
+
+        # Try to release with a wrong token
+        now2 = datetime(2024, 1, 1, 12, 30, 30, tzinfo=timezone.utc)
+        lease_wrong_token = JobLease(
+            job_id=job_id,
+            owner_id=owner_id,
+            token="wrong-token",
+            expires_at=lease1.expires_at,
+            row_version=lease1.row_version,
+            lease_heartbeat_at=lease1.lease_heartbeat_at,
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            release_job_lease(in_memory_session, lease_wrong_token, now2)
+
+        assert exc_info.value.job_id == job_id
+
+        # Verify the lease is still held
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner_id
+
+    def test_release_fails_on_row_version_mismatch(self, in_memory_session: Session):
+        """Release fails when the row version doesn't match."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner_id = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # Acquire the lease
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now1,
+            lease_duration,
+        )
+
+        # Try to release with an old row version
+        now2 = datetime(2024, 1, 1, 12, 30, 30, tzinfo=timezone.utc)
+        lease_old_version = JobLease(
+            job_id=job_id,
+            owner_id=owner_id,
+            token=lease1.token,
+            expires_at=lease1.expires_at,
+            row_version=999,  # Wrong version
+            lease_heartbeat_at=lease1.lease_heartbeat_at,
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            release_job_lease(in_memory_session, lease_old_version, now2)
+
+        assert exc_info.value.job_id == job_id
+
+        # Verify the lease is still held
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner_id
+
+    def test_release_fails_on_expired_lease(self, in_memory_session: Session):
+        """Release fails when the lease has expired."""
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        owner_id = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        # Acquire the lease
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner_id,
+            now1,
+            lease_duration,
+        )
+
+        # Try to release after the lease has expired
+        now2 = datetime(2024, 1, 1, 12, 32, 0, tzinfo=timezone.utc)  # 120 seconds later
+        lease_expired = JobLease(
+            job_id=job_id,
+            owner_id=owner_id,
+            token=lease1.token,
+            expires_at=lease1.expires_at,
+            row_version=lease1.row_version,
+            lease_heartbeat_at=lease1.lease_heartbeat_at,
+        )
+
+        with pytest.raises(LeaseLostError) as exc_info:
+            release_job_lease(in_memory_session, lease_expired, now2)
+
+        assert exc_info.value.job_id == job_id
+
+        # Verify the lease is still held (the expired lease hasn't been released)
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner_id
+
+    def test_release_fails_on_nonexistent_job(self, in_memory_session: Session):
+        """Release raises JobNotFoundError for non-existent job."""
+        job_id = str(uuid.uuid4())
+        now = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease = JobLease(
+            job_id=job_id,
+            owner_id="process-123",
+            token="some-token",
+            expires_at=now + timedelta(seconds=90),
+            row_version=1,
+            lease_heartbeat_at=now,
+        )
+
+        with pytest.raises(JobNotFoundError) as exc_info:
+            release_job_lease(in_memory_session, lease, now)
+
+        assert exc_info.value.job_id == job_id
+
+    def test_stale_takeover_and_release(self, in_memory_session: Session):
+        """Test stale-lease takeover and release (035.20 acceptance).
+
+        This test advances a fake clock beyond expiry, acquires with a new owner,
+        proves the old token cannot release, and releases with the new token.
+        """
+        # Create a job
+        request = TransferRequest(
+            source_playlist_id="spotify:playlist:abc123",
+            destination_playlist_id="youtube:playlist:def456",
+            source_service=SourceService.YOUTUBE,
+            destination_service=DestinationService.SPOTIFY,
+            transfer_mode=TransferMode.CREATE,
+            destination_name="Test Playlist",
+        )
+        job_id = str(uuid.uuid4())
+        created_at = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        create_job(in_memory_session, request, job_id, created_at)
+
+        # Owner 1 acquires the lease
+        owner1 = "process-123"
+        now1 = datetime(2024, 1, 1, 12, 30, 0, tzinfo=timezone.utc)
+        lease_duration = timedelta(seconds=90)
+
+        lease1 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner1,
+            now1,
+            lease_duration,
+        )
+
+        # Verify lease is held by owner1
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner1
+        assert job.lease_expires_at is not None
+
+        # Advance fake clock beyond expiry (120 seconds later)
+        now2 = datetime(2024, 1, 1, 12, 32, 0, tzinfo=timezone.utc)
+
+        # Owner 2 takes over the stale lease (lease has expired)
+        owner2 = "process-456"
+        lease2 = acquire_job_lease(
+            in_memory_session,
+            job_id,
+            owner2,
+            now2,
+            lease_duration,
+        )
+
+        # Verify lease is now held by owner2
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner2
+        assert job.lease_expires_at is not None
+        assert job.lease_token_hash is not None
+        # row_version should have been incremented twice (release not called, so row_version = 3)
+        # Initial row_version=1, acquire by owner1 -> 2, acquire by owner2 -> 3
+        assert job.row_version == 3
+
+        # Try to release with old token (should fail - token mismatch)
+        now3 = datetime(2024, 1, 1, 12, 32, 30, tzinfo=timezone.utc)
+        lease_old_owner = JobLease(
+            job_id=job_id,
+            owner_id=owner1,  # Old owner
+            token=lease1.token,  # Old token
+            expires_at=lease1.expires_at,
+            row_version=lease1.row_version,  # Old row version
+            lease_heartbeat_at=lease1.lease_heartbeat_at,
+        )
+
+        # The old owner cannot release the lease
+        with pytest.raises(LeaseLostError) as exc_info:
+            release_job_lease(in_memory_session, lease_old_owner, now3)
+        assert exc_info.value.job_id == job_id
+
+        # Verify lease is still held by owner2
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder == owner2
+
+        # The new owner can release the lease
+        # Need to use the token from lease2 (the new lease)
+        result = release_job_lease(in_memory_session, lease2, now3)
+        assert result is True
+
+        # Verify lease is released (no active lease)
+        job = get_job(in_memory_session, job_id)
+        assert job is not None
+        assert job.lease_holder is None
+        assert job.lease_expires_at is None
+        assert job.lease_heartbeat_at is None
+        assert job.lease_token_hash is None
+        # row_version should be 4 (initial=1, acquire owner1=2, acquire owner2=3, release=4)
+        assert job.row_version == 4

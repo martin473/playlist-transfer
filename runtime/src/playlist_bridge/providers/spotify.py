@@ -3,6 +3,8 @@
 from typing import Protocol, Sequence, List
 
 from playlist_bridge.domain.models import AccountProfile, SpotifyCandidate, PlaylistReference
+from spotipy.exceptions import SpotifyException
+
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
     PermissionDenied,
@@ -11,8 +13,120 @@ from playlist_bridge.providers.errors import (
     InvalidProviderResponse,
     TemporaryProviderFailure,
     CancellationRequested,
+    ProviderError,
 )
 from playlist_bridge.jobs.cancellation import CancellationToken
+
+
+def map_spotify_error(error: SpotifyException, operation: str) -> ProviderError:
+    """Map Spotify API exceptions to provider errors.
+
+    Args:
+        error: The SpotifyException raised by the Spotify API.
+        operation: The operation that was being performed.
+
+    Returns:
+        A ProviderError subclass appropriate for the exception type.
+
+    The mapping follows this scheme:
+        - 401/403: AuthenticationRequired or PermissionDenied
+        - 404: ProviderNotFound
+        - 429: RateLimited
+        - 5xx: TemporaryProviderFailure
+        - Other/unknown: InvalidProviderResponse or ProviderError
+    """
+    service = "spotify"
+
+    # Handle cases where error.http_status is available
+    http_status = getattr(error, "http_status", None)
+    if http_status is not None:
+        if http_status == 401:
+            return AuthenticationRequired(
+                service,
+                operation,
+                f"Spotify authentication required for {operation}. Please check your credentials."
+            )
+        elif http_status == 403:
+            return PermissionDenied(
+                service,
+                operation,
+                f"Spotify permission denied for {operation}. You may lack the required scope."
+            )
+        elif http_status == 404:
+            return ProviderNotFound(
+                service,
+                operation,
+                f"Spotify resource not found for {operation}. The requested item may not exist."
+            )
+        elif http_status == 429:
+            # Attempt to extract retry-after header
+            retry_after = None
+            if hasattr(error, "headers"):
+                retry_after = error.headers.get("Retry-After")
+            elif hasattr(error, "response") and hasattr(error.response, "headers"):
+                retry_after = error.response.headers.get("Retry-After")
+            elif hasattr(error, "resp") and hasattr(error.resp, "headers"):
+                retry_after = error.resp.headers.get("Retry-After")
+            
+            message = f"Spotify rate limit exceeded for {operation}. Please wait before retrying."
+            if retry_after:
+                message = f"Spotify rate limit exceeded for {operation}. Retry-After: {retry_after} seconds."
+            
+            return RateLimited(service, operation, message)
+        elif 500 <= http_status < 600:
+            return TemporaryProviderFailure(
+                service,
+                operation,
+                f"Spotify server error ({http_status}) for {operation}. Please try again later."
+            )
+
+    # If no http_status or unknown status code, use error message to infer
+    error_msg = str(error).lower()
+    if "authentication" in error_msg or "authorization" in error_msg or "token" in error_msg:
+        return AuthenticationRequired(
+            service,
+            operation,
+            f"Spotify authentication required for {operation}. Please check your credentials."
+        )
+    elif "permission" in error_msg or "scope" in error_msg or "forbidden" in error_msg:
+        return PermissionDenied(
+            service,
+            operation,
+            f"Spotify permission denied for {operation}. You may lack the required scope."
+        )
+    elif "not found" in error_msg or "does not exist" in error_msg:
+        return ProviderNotFound(
+            service,
+            operation,
+            f"Spotify resource not found for {operation}. The requested item may not exist."
+        )
+    elif "rate limit" in error_msg or "too many requests" in error_msg:
+        # Attempt to extract retry-after header from the exception if available
+        retry_after = None
+        if hasattr(error, "headers"):
+            retry_after = error.headers.get("Retry-After")
+        elif hasattr(error, "response") and hasattr(error.response, "headers"):
+            retry_after = error.response.headers.get("Retry-After")
+        elif hasattr(error, "resp") and hasattr(error.resp, "headers"):
+            retry_after = error.resp.headers.get("Retry-After")
+        
+        message = f"Spotify rate limit exceeded for {operation}. Please wait before retrying."
+        if retry_after:
+            message = f"Spotify rate limit exceeded for {operation}. Retry-After: {retry_after} seconds."
+        
+        return RateLimited(service, operation, message)
+    elif "server" in error_msg or "internal" in error_msg or "temporary" in error_msg:
+        return TemporaryProviderFailure(
+            service,
+            operation,
+            f"Spotify temporary failure for {operation}. Please try again later."
+        )
+    else:
+        return InvalidProviderResponse(
+            service,
+            operation,
+            f"Spotify returned an unexpected response for {operation}: {str(error)}"
+        )
 
 
 class SpotifyAdapter(Protocol):
@@ -188,6 +302,35 @@ class SpotifyAdapter(Protocol):
         Raises:
             AuthenticationRequired: If the user is not authenticated with Spotify.
             PermissionDenied: If the user lacks permission to view the playlist.
+            ProviderNotFound: If the Spotify API endpoint is not available.
+            RateLimited: If the Spotify API rate limit has been exceeded.
+            InvalidProviderResponse: If the provider returns malformed data.
+            TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+            CancellationRequested: If the operation is cancelled via the token.
+        """
+        ...
+
+    def user_playlists(
+        self,
+        *,
+        cancel: CancellationToken,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[PlaylistReference]:
+        """List the authenticated user's playlists.
+
+        Args:
+            cancel: CancellationToken to check for cancellation requests.
+            limit: Maximum number of playlists to return. Defaults to 50.
+            offset: Offset for pagination. Defaults to 0.
+
+        Returns:
+            List of PlaylistReference objects representing the user's playlists.
+            May be empty if the user has no playlists or the offset exceeds the total.
+
+        Raises:
+            AuthenticationRequired: If the user is not authenticated with Spotify.
+            PermissionDenied: If the user lacks permission to view their playlists.
             ProviderNotFound: If the Spotify API endpoint is not available.
             RateLimited: If the Spotify API rate limit has been exceeded.
             InvalidProviderResponse: If the provider returns malformed data.
