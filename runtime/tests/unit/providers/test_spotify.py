@@ -1447,3 +1447,563 @@ def test_add_uri_batch_returns_snapshot_id() -> None:
         playlist_id="test_playlist_123",
         items=uris,
     )
+
+
+def test_add_all_uri_batches_batch_order_and_cancellation() -> None:
+    """Test that add_all_uri_batches processes batches in order and checks cancellation.
+
+    This test verifies the acceptance criterion for micro-step 095.02:
+    "A fake adapter confirms batch order and checkpoint callbacks."
+
+    It uses a fake adapter with a mock client to verify:
+    1. URIs are chunked correctly into batches of the specified size.
+    2. Batches are processed in the correct order.
+    3. The cancellation token is checked before each batch.
+    4. Snapshot IDs are returned for each batch.
+    """
+    from playlist_bridge.providers.spotify import add_all_uri_batches
+    from playlist_bridge.jobs.cancellation import ActiveToken, CancelledToken
+    from spotipy import Spotify
+
+    # Create a mock client that returns snapshot IDs and is recognized as a Spotify instance
+    mock_client = MagicMock(spec=Spotify)
+    expected_snapshots = [f"snapshot_batch_{i}" for i in range(1, 4)]
+    mock_client.playlist_add_items.side_effect = expected_snapshots
+
+    # Create a fake adapter with the mock client as _client
+    class FakeAdapterWithClient:
+        """Fake adapter that exposes _client for snapshot retrieval."""
+
+        def __init__(self, client):
+            self._client = client
+
+        def add_items(self, playlist_id, uris, *, cancel, position=0):
+            return len(uris)
+
+        def identity(self, *, cancel):
+            from playlist_bridge.domain.models import AccountProfile
+            return AccountProfile(
+                profile_name="test",
+                service="spotify",
+                provider_user_id="test_user",
+                display_name="Test User",
+            )
+
+        def search_tracks(self, query, *, cancel, limit=10):
+            return []
+
+        def create_playlist(self, name, *, cancel, description="", public=False):
+            from playlist_bridge.domain.models import PlaylistReference
+            return PlaylistReference(
+                provider="spotify",
+                playlist_id="test_playlist",
+                name=name,
+                owner="test_user",
+            )
+
+        def replace_items(self, playlist_id, uris, *, cancel):
+            return len(uris)
+
+        def read_items(self, playlist_id, *, cancel, limit=100, offset=0):
+            return []
+
+        def user_playlists(self, *, cancel, limit=50, offset=0):
+            return []
+
+    adapter = FakeAdapterWithClient(mock_client)
+    cancel = ActiveToken()
+
+    # Test with 5 URIs, batch size 2 -> 3 batches
+    uris = [f"spotify:track:{i}" for i in range(1, 6)]
+    playlist_id = "test_playlist_123"
+
+    result = add_all_uri_batches(
+        adapter=adapter,
+        playlist_id=playlist_id,
+        uris=uris,
+        batch_size=2,
+        cancel=cancel,
+    )
+
+    # Verify snapshot IDs
+    assert result == expected_snapshots
+
+    # Verify batch calls were made in order with correct chunks
+    expected_chunks = [
+        ["spotify:track:1", "spotify:track:2"],
+        ["spotify:track:3", "spotify:track:4"],
+        ["spotify:track:5"],
+    ]
+    actual_calls = mock_client.playlist_add_items.call_args_list
+    assert len(actual_calls) == 3
+    for i, call in enumerate(actual_calls):
+        # call is (args, kwargs) - playlist_add_items may be called with args or kwargs
+        # Check both possibilities
+        args = call[0] if call[0] else ()
+        kwargs = call[1] if call[1] else {}
+        if args:
+            # Called with positional args: (playlist_id, items, position?)
+            assert args[0] == playlist_id
+            assert list(args[1]) == expected_chunks[i]
+        else:
+            # Called with kwargs
+            assert kwargs.get("playlist_id") == playlist_id
+            assert list(kwargs.get("items", [])) == expected_chunks[i]
+
+    # Test cancellation: cancelled token should raise CancellationRequested
+    cancelled_token = CancelledToken()
+    with pytest.raises(Exception) as exc_info:
+        add_all_uri_batches(
+            adapter=adapter,
+            playlist_id=playlist_id,
+            uris=uris,
+            batch_size=2,
+            cancel=cancelled_token,
+        )
+    # The exception should be CancellationRequested
+    from playlist_bridge.providers.errors import CancellationRequested
+    assert isinstance(exc_info.value, CancellationRequested)
+
+
+def test_add_all_uri_batches_empty_uris() -> None:
+    """Test that add_all_uri_batches returns empty list for empty URIs."""
+    from playlist_bridge.providers.spotify import add_all_uri_batches
+    from playlist_bridge.jobs.cancellation import ActiveToken
+    from spotipy import Spotify
+
+    # Create a simple fake adapter
+    class FakeAdapterWithClient:
+        def __init__(self, client):
+            self._client = client
+
+    mock_client = MagicMock(spec=Spotify)
+    adapter = FakeAdapterWithClient(mock_client)
+    cancel = ActiveToken()
+
+    result = add_all_uri_batches(
+        adapter=adapter,
+        playlist_id="test_playlist",
+        uris=[],
+        batch_size=5,
+        cancel=cancel,
+    )
+
+    assert result == []
+    mock_client.playlist_add_items.assert_not_called()
+
+
+def test_add_all_uri_batches_invalid_batch_size() -> None:
+    """Test that add_all_uri_batches raises ValueError for invalid batch size."""
+    from playlist_bridge.providers.spotify import add_all_uri_batches
+    from playlist_bridge.jobs.cancellation import ActiveToken
+    from spotipy import Spotify
+
+    class FakeAdapterWithClient:
+        def __init__(self, client):
+            self._client = client
+
+    mock_client = MagicMock(spec=Spotify)
+    adapter = FakeAdapterWithClient(mock_client)
+    cancel = ActiveToken()
+
+    with pytest.raises(ValueError) as exc_info:
+        add_all_uri_batches(
+            adapter=adapter,
+            playlist_id="test_playlist",
+            uris=["spotify:track:abc"],
+            batch_size=0,
+            cancel=cancel,
+        )
+
+    assert "batch_size must be at least 1" in str(exc_info.value)
+
+
+def test_add_all_uri_batches_no_client_attribute() -> None:
+    """Test that add_all_uri_batches raises InvalidProviderResponse if adapter has no _client."""
+    from playlist_bridge.providers.spotify import add_all_uri_batches
+    from playlist_bridge.jobs.cancellation import ActiveToken
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+
+    # Create an adapter without _client attribute
+    class AdapterWithoutClient:
+        def add_items(self, playlist_id, uris, *, cancel, position=0):
+            return len(uris)
+
+    adapter = AdapterWithoutClient()
+    cancel = ActiveToken()
+
+    with pytest.raises(InvalidProviderResponse) as exc_info:
+        add_all_uri_batches(
+            adapter=adapter,
+            playlist_id="test_playlist",
+            uris=["spotify:track:abc"],
+            batch_size=1,
+            cancel=cancel,
+        )
+
+    assert "Adapter does not expose underlying client" in str(exc_info.value)
+
+
+def test_replace_playlist_items_replacement_then_append() -> None:
+    """Test that replace_playlist_items uses replace for first batch and append for rest.
+
+    This test verifies that:
+    1. replace_items is called exactly once (for the first batch)
+    2. add_items (via add_uri_batch) is called for remaining batches
+    3. create_playlist is never called (no create mode)
+    4. No merge operation is used (no read-before-write pattern)
+    """
+    from playlist_bridge.providers.spotify import replace_playlist_items
+    from playlist_bridge.jobs.cancellation import ActiveToken, CancellationToken
+    from playlist_bridge.providers.errors import InvalidProviderResponse
+    from spotipy import Spotify
+
+    # Track calls to verify behavior
+    class TrackingAdapter:
+        def __init__(self, client):
+            self._client = client
+            self.replace_items_calls: list[tuple[str, Sequence[str]]] = []
+            self.add_items_calls: list[tuple[str, Sequence[str], int]] = []
+            self.create_playlist_calls: list[tuple[str, str, bool]] = []
+            self.read_items_calls: list[tuple[str, int, int]] = []
+
+        def replace_items(
+            self,
+            playlist_id: str,
+            uris: Sequence[str],
+            *,
+            cancel: CancellationToken,
+        ) -> int:
+            self.replace_items_calls.append((playlist_id, uris))
+            return len(uris)
+
+        def add_items(
+            self,
+            playlist_id: str,
+            uris: Sequence[str],
+            *,
+            cancel: CancellationToken,
+            position: int = 0,
+        ) -> int:
+            self.add_items_calls.append((playlist_id, uris, position))
+            return len(uris)
+
+        def create_playlist(
+            self,
+            name: str,
+            *,
+            cancel: CancellationToken,
+            description: str = "",
+            public: bool = False,
+        ) -> PlaylistReference:
+            self.create_playlist_calls.append((name, description, public))
+            return PlaylistReference(
+                provider="spotify",
+                playlist_id="fake_id",
+                name=name,
+                owner="fake_user",
+            )
+
+        def read_items(
+            self,
+            playlist_id: str,
+            *,
+            cancel: CancellationToken,
+            limit: int = 100,
+            offset: int = 0,
+        ) -> List[SpotifyCandidate]:
+            self.read_items_calls.append((playlist_id, limit, offset))
+            return []
+
+        def identity(self, *, cancel: CancellationToken) -> AccountProfile:
+            return AccountProfile(
+                profile_name="fake",
+                service="spotify",
+                provider_user_id="fake_user",
+                display_name="Fake User",
+            )
+
+        def search_tracks(
+            self,
+            query: str,
+            *,
+            cancel: CancellationToken,
+            limit: int = 10,
+        ) -> List[SpotifyCandidate]:
+            return []
+
+        def user_playlists(
+            self,
+            *,
+            cancel: CancellationToken,
+            limit: int = 50,
+            offset: int = 0,
+        ) -> List[PlaylistReference]:
+            return []
+
+    # Create mock Spotify client for add_uri_batch to use
+    mock_client = MagicMock(spec=Spotify)
+    # Mock playlist_add_items to return a snapshot ID string
+    mock_client.playlist_add_items.return_value = "snapshot_123"
+
+    adapter = TrackingAdapter(mock_client)
+    cancel = ActiveToken()
+    playlist_id = "test_playlist"
+    uris = [
+        "spotify:track:1",
+        "spotify:track:2",
+        "spotify:track:3",
+        "spotify:track:4",
+        "spotify:track:5",
+    ]
+    batch_size = 2
+
+    result = replace_playlist_items(
+        adapter=adapter,
+        playlist_id=playlist_id,
+        uris=uris,
+        batch_size=batch_size,
+        cancel=cancel,
+    )
+
+    # Verify replace_items was called once with the first batch
+    assert len(adapter.replace_items_calls) == 1
+    replace_playlist_id, replace_uris = adapter.replace_items_calls[0]
+    assert replace_playlist_id == playlist_id
+    assert list(replace_uris) == ["spotify:track:1", "spotify:track:2"]
+
+    # Verify add_items was called for remaining batches (via add_uri_batch)
+    # add_uri_batch uses client.playlist_add_items, not adapter.add_items directly
+    # But we can verify the adapter's add_items method was not called directly
+    # Instead, we verify that playlist_add_items was called on the client
+    # with the remaining batches
+    assert mock_client.playlist_add_items.call_count == 2  # Two remaining batches
+    # Check the calls: batch 3-4, then batch 5
+    call_args_list = mock_client.playlist_add_items.call_args_list
+    assert call_args_list[0].kwargs["playlist_id"] == playlist_id
+    assert list(call_args_list[0].kwargs["items"]) == ["spotify:track:3", "spotify:track:4"]
+    assert call_args_list[1].kwargs["playlist_id"] == playlist_id
+    assert list(call_args_list[1].kwargs["items"]) == ["spotify:track:5"]
+
+    # Verify create_playlist was never called (no create mode)
+    assert len(adapter.create_playlist_calls) == 0
+
+    # Verify read_items was never called (no merge mode with read-before-write)
+    assert len(adapter.read_items_calls) == 0
+
+    # Verify result contains snapshot IDs for each append operation
+    # First batch (replacement) has no snapshot ID, so only 2 snapshot IDs
+    assert result == ["snapshot_123", "snapshot_123"]
+
+
+def test_replace_playlist_items_empty_uris() -> None:
+    """Test that replace_playlist_items clears playlist when URIs empty."""
+    from playlist_bridge.providers.spotify import replace_playlist_items
+    from playlist_bridge.jobs.cancellation import ActiveToken
+    from spotipy import Spotify
+
+    # Track calls
+    class TrackingAdapter:
+        def __init__(self, client):
+            self._client = client
+            self.replace_items_calls: list[tuple[str, Sequence[str]]] = []
+
+        def replace_items(
+            self,
+            playlist_id: str,
+            uris: Sequence[str],
+            *,
+            cancel: CancellationToken,
+        ) -> int:
+            self.replace_items_calls.append((playlist_id, uris))
+            return len(uris)
+
+        def add_items(self, *args, **kwargs) -> int:
+            return 0
+
+        def create_playlist(self, *args, **kwargs) -> PlaylistReference:
+            return PlaylistReference(
+                provider="spotify",
+                playlist_id="fake_id",
+                name="test",
+                owner="fake_user",
+            )
+
+        def identity(self, *, cancel: CancellationToken) -> AccountProfile:
+            return AccountProfile(
+                profile_name="fake",
+                service="spotify",
+                provider_user_id="fake_user",
+                display_name="Fake User",
+            )
+
+        def search_tracks(self, *args, **kwargs) -> List[SpotifyCandidate]:
+            return []
+
+        def read_items(self, *args, **kwargs) -> List[SpotifyCandidate]:
+            return []
+
+        def user_playlists(self, *args, **kwargs) -> List[PlaylistReference]:
+            return []
+
+    mock_client = MagicMock(spec=Spotify)
+    adapter = TrackingAdapter(mock_client)
+    cancel = ActiveToken()
+
+    result = replace_playlist_items(
+        adapter=adapter,
+        playlist_id="test_playlist",
+        uris=[],
+        batch_size=5,
+        cancel=cancel,
+    )
+
+    # Verify replace_items was called with empty list to clear the playlist
+    assert len(adapter.replace_items_calls) == 1
+    replace_playlist_id, replace_uris = adapter.replace_items_calls[0]
+    assert replace_playlist_id == "test_playlist"
+    assert list(replace_uris) == []
+
+    # Verify no add operations
+    mock_client.playlist_add_items.assert_not_called()
+
+    # Result should be empty
+    assert result == []
+
+
+def test_replace_playlist_items_single_batch() -> None:
+    """Test that replace_playlist_items with single batch just replaces."""
+    from playlist_bridge.providers.spotify import replace_playlist_items
+    from playlist_bridge.jobs.cancellation import ActiveToken
+    from spotipy import Spotify
+
+    class TrackingAdapter:
+        def __init__(self, client):
+            self._client = client
+            self.replace_items_calls: list[tuple[str, Sequence[str]]] = []
+
+        def replace_items(
+            self,
+            playlist_id: str,
+            uris: Sequence[str],
+            *,
+            cancel: CancellationToken,
+        ) -> int:
+            self.replace_items_calls.append((playlist_id, uris))
+            return len(uris)
+
+        def add_items(self, *args, **kwargs) -> int:
+            return 0
+
+        def create_playlist(self, *args, **kwargs) -> PlaylistReference:
+            return PlaylistReference(
+                provider="spotify",
+                playlist_id="fake_id",
+                name="test",
+                owner="fake_user",
+            )
+
+        def identity(self, *, cancel: CancellationToken) -> AccountProfile:
+            return AccountProfile(
+                profile_name="fake",
+                service="spotify",
+                provider_user_id="fake_user",
+                display_name="Fake User",
+            )
+
+        def search_tracks(self, *args, **kwargs) -> List[SpotifyCandidate]:
+            return []
+
+        def read_items(self, *args, **kwargs) -> List[SpotifyCandidate]:
+            return []
+
+        def user_playlists(self, *args, **kwargs) -> List[PlaylistReference]:
+            return []
+
+    mock_client = MagicMock(spec=Spotify)
+    adapter = TrackingAdapter(mock_client)
+    cancel = ActiveToken()
+    uris = ["spotify:track:1", "spotify:track:2"]
+
+    result = replace_playlist_items(
+        adapter=adapter,
+        playlist_id="test_playlist",
+        uris=uris,
+        batch_size=10,  # Larger than URI count -> single batch
+        cancel=cancel,
+    )
+
+    # Verify replace_items was called once
+    assert len(adapter.replace_items_calls) == 1
+    replace_playlist_id, replace_uris = adapter.replace_items_calls[0]
+    assert replace_playlist_id == "test_playlist"
+    assert list(replace_uris) == ["spotify:track:1", "spotify:track:2"]
+
+    # Verify no add operations
+    mock_client.playlist_add_items.assert_not_called()
+
+    # Result should be empty (no append operations)
+    assert result == []
+
+
+def test_replace_playlist_items_invalid_batch_size() -> None:
+    """Test that replace_playlist_items raises ValueError for invalid batch size."""
+    from playlist_bridge.providers.spotify import replace_playlist_items
+    from playlist_bridge.jobs.cancellation import ActiveToken
+    from spotipy import Spotify
+
+    mock_client = MagicMock(spec=Spotify)
+
+    class SimpleAdapter:
+        def __init__(self, client):
+            self._client = client
+
+        def replace_items(self, *args, **kwargs) -> int:
+            return 0
+
+    adapter = SimpleAdapter(mock_client)
+    cancel = ActiveToken()
+
+    with pytest.raises(ValueError) as exc_info:
+        replace_playlist_items(
+            adapter=adapter,
+            playlist_id="test_playlist",
+            uris=["spotify:track:1"],
+            batch_size=0,
+            cancel=cancel,
+        )
+
+    assert "batch_size must be at least 1" in str(exc_info.value)
+
+
+def test_replace_playlist_items_cancellation() -> None:
+    """Test that replace_playlist_items respects cancellation."""
+    from playlist_bridge.providers.spotify import replace_playlist_items
+    from playlist_bridge.jobs.cancellation import ActiveToken
+    from playlist_bridge.providers.errors import CancellationRequested
+    from spotipy import Spotify
+
+    class CancelledToken:
+        def raise_if_cancelled(self) -> None:
+            raise CancellationRequested("spotify", "replace_playlist_items", "Cancelled")
+
+    mock_client = MagicMock(spec=Spotify)
+
+    class SimpleAdapter:
+        def __init__(self, client):
+            self._client = client
+
+        def replace_items(self, *args, **kwargs) -> int:
+            return 0
+
+    adapter = SimpleAdapter(mock_client)
+    cancel = CancelledToken()
+
+    with pytest.raises(CancellationRequested):
+        replace_playlist_items(
+            adapter=adapter,
+            playlist_id="test_playlist",
+            uris=["spotify:track:1", "spotify:track:2"],
+            batch_size=1,
+            cancel=cancel,
+        )

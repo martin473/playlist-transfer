@@ -7,9 +7,11 @@ from playlist_bridge.bootstrap import (
     ApplicationState,
     AuthDependencies,
     JobQueryDependencies,
+    SourceDependencies,
     build_auth_dependencies,
     build_job_query_dependencies,
     build_review_dependencies,
+    build_source_dependencies,
     initialize_application_state,
 )
 from playlist_bridge.ports import ReviewRepositories
@@ -392,6 +394,204 @@ class TestBuildReviewDependencies:
         assert result.decisions is mock_state.decisions
         assert result.corrections is mock_state.corrections
 
+
+class TestSourceDependencies:
+    """Tests for the SourceDependencies class."""
+
+    def test_initialization_with_all_dependencies(self):
+        """Test that SourceDependencies initializes correctly with all dependencies."""
+        # Create mock dependencies
+        mock_source = MagicMock()
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        # Import SourceDependencies from bootstrap
+        from playlist_bridge.bootstrap import SourceDependencies
+
+        # Initialize SourceDependencies
+        deps = SourceDependencies(
+            source=mock_source,
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        # Verify attributes are set correctly
+        assert deps.source is mock_source
+        assert deps.profiles is mock_profiles
+        assert deps.credentials is mock_credentials
+
+    def test_initialization_raises_value_error_for_none_source(self):
+        """Test that ValueError is raised when source is None."""
+        from playlist_bridge.bootstrap import SourceDependencies
+
+        with pytest.raises(ValueError, match="source adapter cannot be None"):
+            SourceDependencies(
+                source=None,
+                profiles=MagicMock(),
+                credentials=MagicMock(),
+            )
+
+    def test_initialization_raises_value_error_for_none_profiles(self):
+        """Test that ValueError is raised when profiles is None."""
+        from playlist_bridge.bootstrap import SourceDependencies
+
+        with pytest.raises(ValueError, match="profiles repository cannot be None"):
+            SourceDependencies(
+                source=MagicMock(),
+                profiles=None,
+                credentials=MagicMock(),
+            )
+
+    def test_initialization_raises_value_error_for_none_credentials(self):
+        """Test that ValueError is raised when credentials is None."""
+        from playlist_bridge.bootstrap import SourceDependencies
+
+        with pytest.raises(ValueError, match="credentials store cannot be None"):
+            SourceDependencies(
+                source=MagicMock(),
+                profiles=MagicMock(),
+                credentials=None,
+            )
+
+
+class TestBuildSourceDependencies:
+    """Tests for the build_source_dependencies function."""
+
+    @patch("playlist_bridge.bootstrap.initialize_application_state")
+    @patch("playlist_bridge.bootstrap.YouTubeSourceAdapter")
+    def test_build_source_dependencies_with_state(
+        self, mock_adapter_class, mock_initialize
+    ):
+        """Test that build_source_dependencies uses provided state."""
+        from playlist_bridge.bootstrap import build_source_dependencies, SourceDependencies
+        from playlist_bridge.providers.errors import AuthenticationRequired
+
+        # Create mock state
+        mock_state = MagicMock()
+        mock_profile = MagicMock()
+        mock_profile.service = MagicMock()
+        mock_profile.service.value = "youtube"
+        mock_state.profiles.get_by_name.return_value = mock_profile
+        mock_credentials = MagicMock()
+        mock_state.credentials.load.return_value = mock_credentials
+
+        # Create mock adapter
+        mock_adapter = MagicMock()
+        mock_adapter_class.return_value = mock_adapter
+
+        # Call function with state
+        result = build_source_dependencies(
+            source_profile="test-profile",
+            state=mock_state,
+        )
+
+        # Verify initialize_application_state was NOT called
+        mock_initialize.assert_not_called()
+
+        # Verify profile was loaded
+        mock_state.profiles.get_by_name.assert_called_once_with("test-profile")
+
+        # Verify credentials were loaded
+        mock_state.credentials.load.assert_called_once_with(
+            mock_profile.service, "test-profile"
+        )
+
+        # Verify YouTubeSourceAdapter was created
+        mock_adapter_class.assert_called_once_with(
+            profile=mock_profile,
+            credentials=mock_credentials,
+        )
+
+        # Verify result is SourceDependencies with correct attributes
+        assert isinstance(result, SourceDependencies)
+        assert result.source is mock_adapter
+        assert result.profiles is mock_state.profiles
+        assert result.credentials is mock_state.credentials
+
+    @patch("playlist_bridge.bootstrap.initialize_application_state")
+    @patch("playlist_bridge.bootstrap.YouTubeSourceAdapter")
+    def test_build_source_dependencies_without_state(
+        self, mock_adapter_class, mock_initialize
+    ):
+        """Test that build_source_dependencies initializes state when not provided."""
+        from playlist_bridge.bootstrap import build_source_dependencies, SourceDependencies
+
+        # Create mock state
+        mock_state = MagicMock()
+        mock_profile = MagicMock()
+        mock_profile.service = MagicMock()
+        mock_profile.service.value = "youtube"
+        mock_state.profiles.get_by_name.return_value = mock_profile
+        mock_credentials = MagicMock()
+        mock_state.credentials.load.return_value = mock_credentials
+        mock_initialize.return_value = mock_state
+
+        # Create mock adapter
+        mock_adapter = MagicMock()
+        mock_adapter_class.return_value = mock_adapter
+
+        # Call function without state
+        result = build_source_dependencies(source_profile="test-profile")
+
+        # Verify initialize_application_state was called
+        mock_initialize.assert_called_once()
+
+        # Verify profile was loaded
+        mock_state.profiles.get_by_name.assert_called_once_with("test-profile")
+
+        # Verify credentials were loaded
+        mock_state.credentials.load.assert_called_once_with(
+            mock_profile.service, "test-profile"
+        )
+
+        # Verify YouTubeSourceAdapter was created
+        mock_adapter_class.assert_called_once_with(
+            profile=mock_profile,
+            credentials=mock_credentials,
+        )
+
+        # Verify result is SourceDependencies with correct attributes
+        assert isinstance(result, SourceDependencies)
+        assert result.source is mock_adapter
+        assert result.profiles is mock_state.profiles
+        assert result.credentials is mock_state.credentials
+
+    @patch("playlist_bridge.bootstrap.initialize_application_state")
+    def test_build_source_dependencies_profile_not_found(self, mock_initialize):
+        """Test that ValueError is raised when profile is not found."""
+        from playlist_bridge.bootstrap import build_source_dependencies
+
+        # Create mock state
+        mock_state = MagicMock()
+        mock_state.profiles.get_by_name.return_value = None
+        mock_initialize.return_value = mock_state
+
+        # Call function and expect ValueError
+        with pytest.raises(ValueError, match="Profile not found: nonexistent-profile"):
+            build_source_dependencies(source_profile="nonexistent-profile")
+
+    @patch("playlist_bridge.bootstrap.initialize_application_state")
+    def test_build_source_dependencies_no_credentials(self, mock_initialize):
+        """Test that AuthenticationRequired is raised when no credentials found."""
+        from playlist_bridge.bootstrap import build_source_dependencies
+        from playlist_bridge.providers.errors import AuthenticationRequired
+
+        # Create mock state
+        mock_state = MagicMock()
+        mock_profile = MagicMock()
+        mock_profile.service = MagicMock()
+        mock_profile.service.value = "youtube"
+        mock_state.profiles.get_by_name.return_value = mock_profile
+        mock_state.credentials.load.return_value = None
+        mock_initialize.return_value = mock_state
+
+        # Call function and expect AuthenticationRequired
+        with pytest.raises(
+            AuthenticationRequired,
+            match="No credentials found for test-profile",
+        ):
+            build_source_dependencies(source_profile="test-profile")
+
     @patch("playlist_bridge.bootstrap.initialize_application_state")
     def test_build_review_dependencies_without_state(self, mock_initialize):
         """Test that build_review_dependencies initializes state when not provided."""
@@ -415,3 +615,201 @@ class TestBuildReviewDependencies:
         assert result.tracks is mock_state.tracks
         assert result.decisions is mock_state.decisions
         assert result.corrections is mock_state.corrections
+
+
+class TestSourceDependencies:
+    """Tests for the SourceDependencies class."""
+
+    def test_initialization_with_all_dependencies(self):
+        """Test that SourceDependencies initializes correctly with all dependencies."""
+        # Create mock dependencies
+        mock_source = MagicMock()
+        mock_profiles = MagicMock()
+        mock_credentials = MagicMock()
+
+        # Import SourceDependencies from bootstrap
+        from playlist_bridge.bootstrap import SourceDependencies
+
+        # Initialize SourceDependencies
+        deps = SourceDependencies(
+            source=mock_source,
+            profiles=mock_profiles,
+            credentials=mock_credentials,
+        )
+
+        # Verify attributes are set correctly
+        assert deps.source is mock_source
+        assert deps.profiles is mock_profiles
+        assert deps.credentials is mock_credentials
+
+    def test_initialization_raises_value_error_for_none_source(self):
+        """Test that ValueError is raised when source is None."""
+        from playlist_bridge.bootstrap import SourceDependencies
+
+        with pytest.raises(ValueError, match="source adapter cannot be None"):
+            SourceDependencies(
+                source=None,
+                profiles=MagicMock(),
+                credentials=MagicMock(),
+            )
+
+    def test_initialization_raises_value_error_for_none_profiles(self):
+        """Test that ValueError is raised when profiles is None."""
+        from playlist_bridge.bootstrap import SourceDependencies
+
+        with pytest.raises(ValueError, match="profiles repository cannot be None"):
+            SourceDependencies(
+                source=MagicMock(),
+                profiles=None,
+                credentials=MagicMock(),
+            )
+
+    def test_initialization_raises_value_error_for_none_credentials(self):
+        """Test that ValueError is raised when credentials is None."""
+        from playlist_bridge.bootstrap import SourceDependencies
+
+        with pytest.raises(ValueError, match="credentials store cannot be None"):
+            SourceDependencies(
+                source=MagicMock(),
+                profiles=MagicMock(),
+                credentials=None,
+            )
+
+
+class TestBuildSourceDependencies:
+    """Tests for the build_source_dependencies function."""
+
+    @patch("playlist_bridge.bootstrap.initialize_application_state")
+    @patch("playlist_bridge.bootstrap.YouTubeSourceAdapter")
+    def test_build_source_dependencies_with_state(
+        self, mock_adapter_class, mock_initialize
+    ):
+        """Test that build_source_dependencies uses provided state."""
+        from playlist_bridge.bootstrap import build_source_dependencies, SourceDependencies
+        from playlist_bridge.providers.errors import AuthenticationRequired
+
+        # Create mock state
+        mock_state = MagicMock()
+        mock_profile = MagicMock()
+        mock_profile.service = MagicMock()
+        mock_profile.service.value = "youtube"
+        mock_state.profiles.get_by_name.return_value = mock_profile
+        mock_credentials = MagicMock()
+        mock_state.credentials.load.return_value = mock_credentials
+
+        # Create mock adapter
+        mock_adapter = MagicMock()
+        mock_adapter_class.return_value = mock_adapter
+
+        # Call function with state
+        result = build_source_dependencies(
+            source_profile="test-profile",
+            state=mock_state,
+        )
+
+        # Verify initialize_application_state was NOT called
+        mock_initialize.assert_not_called()
+
+        # Verify profile was loaded
+        mock_state.profiles.get_by_name.assert_called_once_with("test-profile")
+
+        # Verify credentials were loaded
+        mock_state.credentials.load.assert_called_once_with(
+            mock_profile.service, "test-profile"
+        )
+
+        # Verify YouTubeSourceAdapter was created
+        mock_adapter_class.assert_called_once_with(
+            profile=mock_profile,
+            credentials=mock_credentials,
+        )
+
+        # Verify result is SourceDependencies with correct attributes
+        assert isinstance(result, SourceDependencies)
+        assert result.source is mock_adapter
+        assert result.profiles is mock_state.profiles
+        assert result.credentials is mock_state.credentials
+
+    @patch("playlist_bridge.bootstrap.initialize_application_state")
+    @patch("playlist_bridge.bootstrap.YouTubeSourceAdapter")
+    def test_build_source_dependencies_without_state(
+        self, mock_adapter_class, mock_initialize
+    ):
+        """Test that build_source_dependencies initializes state when not provided."""
+        from playlist_bridge.bootstrap import build_source_dependencies, SourceDependencies
+
+        # Create mock state
+        mock_state = MagicMock()
+        mock_profile = MagicMock()
+        mock_profile.service = MagicMock()
+        mock_profile.service.value = "youtube"
+        mock_state.profiles.get_by_name.return_value = mock_profile
+        mock_credentials = MagicMock()
+        mock_state.credentials.load.return_value = mock_credentials
+        mock_initialize.return_value = mock_state
+
+        # Create mock adapter
+        mock_adapter = MagicMock()
+        mock_adapter_class.return_value = mock_adapter
+
+        # Call function without state
+        result = build_source_dependencies(source_profile="test-profile")
+
+        # Verify initialize_application_state was called
+        mock_initialize.assert_called_once()
+
+        # Verify profile was loaded
+        mock_state.profiles.get_by_name.assert_called_once_with("test-profile")
+
+        # Verify credentials were loaded
+        mock_state.credentials.load.assert_called_once_with(
+            mock_profile.service, "test-profile"
+        )
+
+        # Verify YouTubeSourceAdapter was created
+        mock_adapter_class.assert_called_once_with(
+            profile=mock_profile,
+            credentials=mock_credentials,
+        )
+
+        # Verify result is SourceDependencies with correct attributes
+        assert isinstance(result, SourceDependencies)
+        assert result.source is mock_adapter
+        assert result.profiles is mock_state.profiles
+        assert result.credentials is mock_state.credentials
+
+    @patch("playlist_bridge.bootstrap.initialize_application_state")
+    def test_build_source_dependencies_profile_not_found(self, mock_initialize):
+        """Test that ValueError is raised when profile is not found."""
+        from playlist_bridge.bootstrap import build_source_dependencies
+
+        # Create mock state
+        mock_state = MagicMock()
+        mock_state.profiles.get_by_name.return_value = None
+        mock_initialize.return_value = mock_state
+
+        # Call function and expect ValueError
+        with pytest.raises(ValueError, match="Profile not found: nonexistent-profile"):
+            build_source_dependencies(source_profile="nonexistent-profile")
+
+    @patch("playlist_bridge.bootstrap.initialize_application_state")
+    def test_build_source_dependencies_no_credentials(self, mock_initialize):
+        """Test that AuthenticationRequired is raised when no credentials found."""
+        from playlist_bridge.bootstrap import build_source_dependencies
+        from playlist_bridge.providers.errors import AuthenticationRequired
+
+        # Create mock state
+        mock_state = MagicMock()
+        mock_profile = MagicMock()
+        mock_profile.service = MagicMock()
+        mock_profile.service.value = "youtube"
+        mock_state.profiles.get_by_name.return_value = mock_profile
+        mock_state.credentials.load.return_value = None
+        mock_initialize.return_value = mock_state
+
+        # Call function and expect AuthenticationRequired
+        with pytest.raises(
+            AuthenticationRequired,
+            match="No credentials found for test-profile",
+        ):
+            build_source_dependencies(source_profile="test-profile")

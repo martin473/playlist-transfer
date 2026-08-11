@@ -1304,3 +1304,182 @@ def add_uri_batch(
 
     except SpotifyException as e:
         raise map_spotify_error(e, "add_uri_batch")
+
+
+def add_all_uri_batches(
+    adapter: SpotifyAdapter,
+    playlist_id: str,
+    uris: Sequence[str],
+    batch_size: int,
+    cancel: CancellationToken,
+) -> list[str]:
+    """Add all URIs in batches to a Spotify playlist.
+
+    Iterates through URIs in batches of batch_size, adding each batch to the
+    destination playlist. Stops immediately on failure (first error propagates).
+
+    Args:
+        adapter: An authenticated SpotifyAdapter instance.
+        playlist_id: The ID of the playlist to add items to.
+        uris: Sequence of Spotify track URIs to add to the playlist.
+        batch_size: Maximum number of URIs per batch.
+        cancel: CancellationToken to check for cancellation requests.
+
+    Returns:
+        list[str]: List of snapshot IDs returned for each batch addition.
+
+    Raises:
+        ValueError: If batch_size is less than 1.
+        AuthenticationRequired: If the user is not authenticated with Spotify.
+        PermissionDenied: If the user lacks permission to modify the playlist.
+        ProviderNotFound: If the Spotify API endpoint is not available.
+        RateLimited: If the Spotify API rate limit has been exceeded.
+        InvalidProviderResponse: If the provider returns malformed data.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+        CancellationRequested: If the operation is cancelled.
+
+    Example:
+        >>> snapshot_ids = add_all_uri_batches(
+        ...     adapter=spotify_adapter,
+        ...     playlist_id="37i9dQZF1DXcBWIGoYBM5M",
+        ...     uris=["spotify:track:4iV5W9uYEdYUVa79Axb7Rh", ...],
+        ...     batch_size=50,
+        ...     cancel=cancel_token,
+        ... )
+    """
+    # Validate batch_size
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+
+    # Check cancellation before processing
+    cancel.raise_if_cancelled()
+
+    # If no uris to add, return empty list
+    if not uris:
+        return []
+
+    # Extract the raw client from the adapter.
+    # The AuthenticatedSpotifyAdapter stores the Spotify client as _client.
+    # For fake adapters in tests, we also use _client to provide snapshot IDs.
+    if not hasattr(adapter, "_client"):
+        raise InvalidProviderResponse(
+            "spotify",
+            "add_all_uri_batches",
+            "Adapter does not expose underlying client for snapshot retrieval"
+        )
+    client = getattr(adapter, "_client")
+    if not isinstance(client, Spotify):
+        raise InvalidProviderResponse(
+            "spotify",
+            "add_all_uri_batches",
+            "Adapter's _client is not a Spotify instance"
+        )
+
+    # Split URIs into chunks
+    chunks = chunk_uris(uris, batch_size)
+    snapshot_ids: list[str] = []
+
+    # Process each batch in order
+    for batch in chunks:
+        # Check cancellation before each batch
+        cancel.raise_if_cancelled()
+        # Add the batch and capture the snapshot ID
+        snapshot_id = add_uri_batch(client, playlist_id, batch)
+        snapshot_ids.append(snapshot_id)
+
+    return snapshot_ids
+
+
+def replace_playlist_items(
+    adapter: SpotifyAdapter,
+    playlist_id: str,
+    uris: Sequence[str],
+    batch_size: int,
+    cancel: CancellationToken,
+) -> list[str]:
+    """Replace a playlist's contents with the first batch and append the rest.
+
+    Replaces the entire playlist with the first batch of URIs, then appends
+    all remaining batches. This is useful for refreshing a destination playlist
+    while preserving order and respecting batch limits.
+
+    Args:
+        adapter: An authenticated SpotifyAdapter instance.
+        playlist_id: The ID of the playlist to replace and append to.
+        uris: Sequence of Spotify track URIs to set as the new playlist contents.
+        batch_size: Maximum number of URIs per batch.
+        cancel: CancellationToken to check for cancellation requests.
+
+    Returns:
+        list[str]: Snapshot IDs from each append operation after the replacement.
+                   The replacement operation does not produce a snapshot ID.
+                   Returns empty list if there are no URIs or only one batch.
+
+    Raises:
+        ValueError: If batch_size is less than 1.
+        AuthenticationRequired: If the user is not authenticated with Spotify.
+        PermissionDenied: If the user lacks permission to modify the playlist.
+        ProviderNotFound: If the Spotify API endpoint is not available.
+        RateLimited: If the Spotify API rate limit has been exceeded.
+        InvalidProviderResponse: If the provider returns malformed data.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+        CancellationRequested: If the operation is cancelled.
+
+    Example:
+        >>> snapshot_ids = replace_playlist_items(
+        ...     adapter=spotify_adapter,
+        ...     playlist_id="37i9dQZF1DXcBWIGoYBM5M",
+        ...     uris=["spotify:track:4iV5W9uYEdYUVa79Axb7Rh", ...],
+        ...     batch_size=50,
+        ...     cancel=cancel_token,
+        ... )
+    """
+    # Validate batch_size
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+
+    # Check cancellation before processing
+    cancel.raise_if_cancelled()
+
+    # If no uris to add, return empty list (replacement with empty would delete all)
+    if not uris:
+        # Still need to replace with empty to clear the playlist
+        adapter.replace_items(playlist_id, [], cancel=cancel)
+        return []
+
+    # Extract the raw client from the adapter for append operations.
+    # The AuthenticatedSpotifyAdapter stores the Spotify client as _client.
+    if not hasattr(adapter, "_client"):
+        raise InvalidProviderResponse(
+            "spotify",
+            "replace_playlist_items",
+            "Adapter does not expose underlying client for append operations"
+        )
+    client = getattr(adapter, "_client")
+    if not isinstance(client, Spotify):
+        raise InvalidProviderResponse(
+            "spotify",
+            "replace_playlist_items",
+            "Adapter's _client is not a Spotify instance"
+        )
+
+    # Split URIs into chunks
+    chunks = chunk_uris(uris, batch_size)
+
+    # First batch: replace the entire playlist
+    first_batch = next(iter(chunks), None)
+    if first_batch is not None:
+        cancel.raise_if_cancelled()
+        adapter.replace_items(playlist_id, first_batch, cancel=cancel)
+
+    # Remaining batches: append using add_uri_batch
+    snapshot_ids: list[str] = []
+    # Skip the first chunk (already replaced)
+    for i, batch in enumerate(chunks):
+        if i == 0:
+            continue
+        cancel.raise_if_cancelled()
+        snapshot_id = add_uri_batch(client, playlist_id, batch)
+        snapshot_ids.append(snapshot_id)
+
+    return snapshot_ids

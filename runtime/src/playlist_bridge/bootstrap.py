@@ -28,7 +28,16 @@ from playlist_bridge.ports import (
     ManualCorrectionRepository,
     ReviewRepositories,
     SourceTrackRepository,
+    CredentialCorruptionError,
 )
+from playlist_bridge.providers.youtube import SourceAdapter
+from playlist_bridge.providers.errors import AuthenticationRequired, InvalidProviderResponse
+
+# YouTubeSourceAdapter may not be implemented yet; use try/except to handle it gracefully
+try:
+    from playlist_bridge.providers.youtube import YouTubeSourceAdapter
+except ImportError:
+    YouTubeSourceAdapter = None
 from playlist_bridge.paths import ensure_app_directories
 
 
@@ -176,6 +185,50 @@ class JobQueryDependencies:
         if jobs is None:
             raise ValueError("jobs repository cannot be None")
         self.jobs = jobs
+
+
+# ============================================================================
+# Source Dependencies
+# ============================================================================
+
+
+class SourceDependencies:
+    """Dependency container for YouTube source operations.
+
+    Aggregates the source adapter, profile repository, and credential store
+    needed by source inspection commands.
+
+    Attributes:
+        source: SourceAdapter instance for loading YouTube playlist data.
+        profiles: AccountProfileRepository instance for profile persistence.
+        credentials: CredentialStore instance for OAuth token management.
+    """
+
+    def __init__(
+        self,
+        source: SourceAdapter,
+        profiles: AccountProfileRepository,
+        credentials: CredentialStore,
+    ) -> None:
+        """Initialize the source dependencies container.
+
+        Args:
+            source: SourceAdapter instance for loading YouTube playlist data.
+            profiles: AccountProfileRepository instance for profile persistence.
+            credentials: CredentialStore instance for OAuth token management.
+
+        Raises:
+            ValueError: If any of the arguments are None.
+        """
+        if source is None:
+            raise ValueError("source adapter cannot be None")
+        if profiles is None:
+            raise ValueError("profiles repository cannot be None")
+        if credentials is None:
+            raise ValueError("credentials store cannot be None")
+        self.source = source
+        self.profiles = profiles
+        self.credentials = credentials
 
 
 # ============================================================================
@@ -339,4 +392,74 @@ def build_review_dependencies(
         tracks=state.tracks,
         decisions=state.decisions,
         corrections=state.corrections,
+    )
+
+
+def build_source_dependencies(
+    source_profile: str,
+    *,
+    state: ApplicationState | None = None,
+) -> SourceDependencies:
+    """Build YouTube source dependencies from application state.
+
+    This function loads the named YouTube profile, retrieves the associated
+    credentials from the credential store, and creates a YouTube source adapter
+    for loading playlist data.
+
+    Args:
+        source_profile: The name of the YouTube profile to load.
+        state: ApplicationState instance. If None, initializes a new state.
+
+    Returns:
+        SourceDependencies: Container with source adapter, profiles, and credentials.
+
+    Raises:
+        AuthenticationRequired: If the user is not authenticated with the source service.
+        CredentialCorruptionError: If stored credentials are malformed or cannot be deserialized.
+        InvalidProviderResponse: If the provider returns malformed data.
+        OSError: If directory creation fails.
+        SQLAlchemyError: If database operations fail.
+        MigrationError: If schema migration fails.
+        KeyringError: If keyring operations fail.
+
+    Side Effects:
+        filesystem_directory_create: Creates application directories.
+        sqlite_open: Opens the SQLite database.
+        sqlite_migration: Upgrades the schema to the latest version.
+        os_keychain_read: Reads credentials from the keychain.
+        provider_network: Communicates with the YouTube API.
+    """
+    if YouTubeSourceAdapter is None:
+        raise NotImplementedError(
+            "YouTubeSourceAdapter is not yet implemented. "
+            "This will be completed in a future dispatch."
+        )
+
+    if state is None:
+        state = initialize_application_state()
+
+    # Load the profile from the repository
+    profile = state.profiles.get_by_name(source_profile)
+    if profile is None:
+        raise ValueError(f"Profile not found: {source_profile}")
+
+    # Load credentials for the profile
+    credentials = state.credentials.load(profile.service, source_profile)
+    if credentials is None:
+        raise AuthenticationRequired(
+            service=profile.service.value,
+            profile_name=source_profile,
+            message=f"No credentials found for {source_profile}",
+        )
+
+    # Create the YouTube source adapter
+    source = YouTubeSourceAdapter(
+        profile=profile,
+        credentials=credentials,
+    )
+
+    return SourceDependencies(
+        source=source,
+        profiles=state.profiles,
+        credentials=state.credentials,
     )

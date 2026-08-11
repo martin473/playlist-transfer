@@ -14,7 +14,8 @@ from playlist_bridge.domain.models import (
     MatchDecision,
     SpotifyCandidate,
 )
-from playlist_bridge.ports import JobRepository, JobNotFoundError, LeaseLostError
+from playlist_bridge.ports import JobRepository, JobNotFoundError, LeaseLostError, SourceTrackRepository
+from playlist_bridge.persistence.repositories import JobLease
 from playlist_bridge.domain.events import JobEvent, JobEventAdapter, SourceProgressEvent
 from playlist_bridge.domain.enums import JobStatus
 from playlist_bridge.providers.youtube import SourceAdapter, CancellationToken
@@ -307,6 +308,7 @@ class RuntimeDependencies(Protocol):
     """Container for runtime dependencies needed by job stages."""
     jobs: JobRepository
     source_adapter: SourceAdapter
+    source_tracks: SourceTrackRepository
 
 
 def load_source_stage(
@@ -387,6 +389,9 @@ def load_source_stage(
         reference=reference,
         cancel=cancel,
     )
+
+    # 120.03: Persist ordered source tracks idempotently
+    dependencies.source_tracks.replace_for_job(job_id, loaded_playlist.tracks)
 
     # Emit updated SourceProgressEvent with loaded count
     emit(SourceProgressEvent(

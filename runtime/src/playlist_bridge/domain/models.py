@@ -246,6 +246,62 @@ class PlaylistReference(BaseModel):
         return v
 
 
+class DestinationPlaylist(BaseModel):
+    """A provider-neutral destination playlist model.
+
+    This model represents a playlist on a destination service (e.g., Spotify),
+    containing only provider-neutral fields. It is used for transferring,
+    verifying, and reporting on destination playlists.
+
+    Attributes:
+        playlist_id: Provider-specific playlist identifier.
+        name: Playlist name.
+        owner_id: Owner identifier on the provider.
+        public: Whether the playlist is publicly visible.
+        collaborative: Whether the playlist is collaborative.
+        description: Optional playlist description.
+        snapshot_id: Optional provider snapshot identifier.
+        external_url: Optional external URL to view the playlist.
+        track_count: Number of tracks in the playlist.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    playlist_id: str = Field(description="Provider-specific playlist identifier")
+    name: str = Field(description="Playlist name")
+    owner_id: str = Field(description="Owner identifier on the provider")
+    public: bool = Field(description="Whether the playlist is publicly visible")
+    collaborative: bool = Field(description="Whether the playlist is collaborative")
+    description: Optional[str] = Field(default=None, description="Optional playlist description")
+    snapshot_id: Optional[str] = Field(default=None, description="Optional provider snapshot identifier")
+    external_url: Optional[str] = Field(default=None, description="Optional external URL to view the playlist")
+    track_count: int = Field(description="Number of tracks in the playlist", ge=0)
+
+    @field_validator("playlist_id")
+    @classmethod
+    def validate_playlist_id(cls, v: str) -> str:
+        """Validate that playlist_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("playlist_id cannot be empty")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        """Validate that name is not empty."""
+        if not v or not v.strip():
+            raise ValueError("name cannot be empty")
+        return v
+
+    @field_validator("owner_id")
+    @classmethod
+    def validate_owner_id(cls, v: str) -> str:
+        """Validate that owner_id is not empty."""
+        if not v or not v.strip():
+            raise ValueError("owner_id cannot be empty")
+        return v
+
+
 class TransferRequest(BaseModel):
     """Request to transfer a playlist from source to destination.
 
