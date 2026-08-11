@@ -1,25 +1,29 @@
 """Job runner and job creation for playlist-bridge."""
 
-import json
 import uuid
-from datetime import datetime, timezone
-from typing import NamedTuple, Protocol, Sequence, TextIO, Union, Optional
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import NamedTuple, Protocol, TextIO
 
+from playlist_bridge.domain.enums import JobStatus
+from playlist_bridge.domain.events import JobEvent, JobEventAdapter, SourceProgressEvent
 from playlist_bridge.domain.models import (
-    TransferRequest,
+    DestinationPlaylist,
     LoadedSourcePlaylist,
-    SourcePlaylistMetadata,
+    MatchDecision,
     PlaylistReference,
     SourceTrack,
-    MatchDecision,
-    SpotifyCandidate,
+    TransferRequest,
 )
-from playlist_bridge.ports import JobRepository, JobNotFoundError, LeaseLostError, SourceTrackRepository
-from playlist_bridge.persistence.repositories import JobLease
-from playlist_bridge.domain.events import JobEvent, JobEventAdapter, SourceProgressEvent
-from playlist_bridge.domain.enums import JobStatus
-from playlist_bridge.providers.youtube import SourceAdapter, CancellationToken
 from playlist_bridge.jobs.cancellation import EventEmitter
+from playlist_bridge.ports import (
+    JobNotFoundError,
+    JobRepository,
+    LeaseLostError,
+    SourceTrackRepository,
+)
+from playlist_bridge.providers.spotify import SpotifyAdapter
+from playlist_bridge.providers.youtube import CancellationToken, SourceAdapter
 
 
 def new_job_id() -> str:
@@ -41,7 +45,7 @@ def new_job_id() -> str:
     return uuid.uuid4().hex
 
 
-def validate_job_id(job_id: Union[str, None]) -> bool:
+def validate_job_id(job_id: str | None) -> bool:
     """Validate that a job ID is a properly formed UUID4 hex string.
 
     Args:
@@ -374,7 +378,7 @@ def load_source_stage(
         loaded_count=0,
         normalized_count=0,
         skipped_count=0,
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
     ))
 
     # 120.02: Load source playlist using the complete-load method
@@ -401,7 +405,7 @@ def load_source_stage(
         loaded_count=len(loaded_playlist.tracks),
         normalized_count=len(loaded_playlist.tracks),
         skipped_count=0,
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
     ))
 
     # Return the loaded playlist
@@ -513,3 +517,159 @@ def accepted_uris_in_source_order(
         # The decision status indicates these states
 
     return result
+
+
+def resolve_destination(
+    request: TransferRequest,
+    adapter: SpotifyAdapter,
+    cancel: CancellationToken,
+) -> DestinationPlaylist:
+    """Resolve create, merge, or replace behavior using the destination name and stored destination ID.
+
+    This function determines the appropriate destination playlist based on the transfer mode:
+    - CREATE: Always creates a new playlist with the given name. Does NOT reuse an existing
+      playlist with the same name to avoid silent overwrites.
+    - MERGE: Uses the stored destination_playlist_id from the request.
+    - REPLACE: Uses the stored destination_playlist_id from the request.
+    - DRY_RUN: Returns a placeholder DestinationPlaylist for simulation purposes.
+
+    Args:
+        request: The transfer request containing destination mode and name/ID.
+        adapter: The SpotifyAdapter implementation for API calls.
+        cancel: CancellationToken to check for cancellation requests.
+
+    Returns:
+        DestinationPlaylist containing the resolved playlist metadata.
+
+    Raises:
+        ValueError: If the request is invalid for the transfer mode.
+        AuthenticationRequired: If the user is not authenticated with Spotify.
+        PermissionDenied: If the user lacks permission to create or access playlists.
+        ProviderNotFound: If the Spotify API endpoint is not available.
+        RateLimited: If the Spotify API rate limit has been exceeded.
+        InvalidProviderResponse: If the provider returns malformed data.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+        CancellationRequested: If the operation is cancelled via the token.
+
+    Examples:
+        >>> from playlist_bridge.domain.enums import TransferMode
+        >>> from playlist_bridge.domain.models import TransferRequest
+        >>> request = TransferRequest(
+        ...     source_service="youtube",
+        ...     source_playlist_id="PLabc123",
+        ...     destination_service="spotify",
+        ...     transfer_mode=TransferMode.CREATE,
+        ...     destination_name="My New Playlist",
+        ... )
+        >>> playlist = resolve_destination(request, adapter, cancel)
+        >>> isinstance(playlist, DestinationPlaylist)
+        True
+        >>> playlist.name == "My New Playlist"
+        True
+    """
+    # Check for cancellation before any network operations
+    cancel.raise_if_cancelled()
+
+    mode = request.transfer_mode
+
+    if mode.value == "create":
+        # CREATE mode: Always create a new playlist with the given name.
+        # Do NOT check for existing playlists with the same name to avoid silent reuse.
+        if not request.destination_name:
+            raise ValueError("destination_name is required for CREATE mode")
+
+        # Create the playlist with default visibility (private unless specified)
+        is_public = request.visibility == "public" if request.visibility else False
+        description = f"Imported from {request.source_service} playlist {request.source_playlist_id}"
+
+        playlist_ref = adapter.create_playlist(
+            name=request.destination_name,
+            cancel=cancel,
+            description=description,
+            public=is_public,
+        )
+
+        # Convert PlaylistReference to DestinationPlaylist
+        return DestinationPlaylist(
+            playlist_id=playlist_ref.playlist_id,
+            name=playlist_ref.name,
+            owner_id=playlist_ref.owner,
+            public=is_public,
+            collaborative=False,  # Default for new playlists
+            description=description,
+            snapshot_id=None,  # Not available from PlaylistReference
+            external_url=None,  # Not available from PlaylistReference
+            track_count=0,
+        )
+
+    elif mode.value in ("merge", "replace"):
+        # MERGE/REPLACE mode: Use the stored destination_playlist_id.
+        if not request.destination_playlist_id:
+            raise ValueError("destination_playlist_id is required for MERGE/REPLACE modes")
+
+        # For merge/replace, we need to fetch the existing playlist details.
+        # However, the SpotifyAdapter doesn't have a direct method to fetch a single playlist.
+        # We can use user_playlists to find it, or we could add a method.
+        # For now, we'll assume the playlist exists and create a DestinationPlaylist
+        # from the known ID. This is a simplified implementation.
+
+        # Fetch user's playlists to find the playlist by ID
+        # Note: This is a paginated search; we'll fetch enough to find the playlist.
+        # In practice, we might want to add a dedicated get_playlist method to the adapter.
+        limit = 50
+        offset = 0
+        found = None
+        while True:
+            playlists = adapter.user_playlists(cancel=cancel, limit=limit, offset=offset)
+            if not playlists:
+                break
+            for ref in playlists:
+                if ref.playlist_id == request.destination_playlist_id:
+                    found = ref
+                    break
+            if found:
+                break
+            offset += limit
+
+        if found is None:
+            raise ValueError(
+                f"Playlist with ID {request.destination_playlist_id} not found for the authenticated user"
+            )
+
+        # Convert PlaylistReference to DestinationPlaylist
+        return DestinationPlaylist(
+            playlist_id=found.playlist_id,
+            name=found.name,
+            owner_id=found.owner,
+            public=False,  # Default; we don't have visibility from PlaylistReference
+            collaborative=False,  # Default
+            description=None,
+            snapshot_id=None,
+            external_url=None,
+            track_count=0,  # We don't have track count from PlaylistReference
+        )
+
+    elif mode.value == "dry_run":
+        # DRY_RUN mode: Return a placeholder DestinationPlaylist for simulation.
+        # This allows the dry run to proceed without making API calls.
+        if request.destination_name:
+            name = request.destination_name
+        elif request.destination_playlist_id:
+            name = f"Playlist {request.destination_playlist_id}"
+        else:
+            name = "Dry Run Playlist"
+
+        return DestinationPlaylist(
+            playlist_id="dry-run-placeholder",
+            name=name,
+            owner_id="dry-run-user",
+            public=False,
+            collaborative=False,
+            description="Dry run placeholder playlist",
+            snapshot_id=None,
+            external_url=None,
+            track_count=0,
+        )
+
+    else:
+        raise ValueError(f"Unsupported transfer mode: {mode}")
