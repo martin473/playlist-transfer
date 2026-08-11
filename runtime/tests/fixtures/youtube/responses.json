@@ -62,5 +62,133 @@
         }
       }
     ]
+  },
+  "official_video": {
+    "kind": "youtube#playlistItemListResponse",
+    "etag": "\"official_video_etag_002\"",
+    "nextPageToken": null,
+    "prevPageToken": null,
+    "pageInfo": {
+      "totalResults": 1,
+      "resultsPerPage": 50
+    },
+    "items": [
+      {
+        "kind": "youtube#playlistItem",
+        "etag": "\"item_etag_002\"",
+        "id": "PLItem_002",
+        "snippet": {
+          "publishedAt": "2024-02-20T14:30:00Z",
+          "channelId": "UCofficialchannel123",
+          "title": "Official Video - Song Title",
+          "description": "Official music video for Song Title",
+          "thumbnails": {
+            "default": {
+              "url": "https://i.ytimg.com/vi/video002/default.jpg",
+              "width": 120,
+              "height": 90
+            },
+            "medium": {
+              "url": "https://i.ytimg.com/vi/video002/mqdefault.jpg",
+              "width": 320,
+              "height": 180
+            },
+            "high": {
+              "url": "https://i.ytimg.com/vi/video002/hqdefault.jpg",
+              "width": 480,
+              "height": 360
+            }
+          },
+          "channelTitle": "Official Artist Channel",
+          "playlistId": "PLofficialvideo002",
+          "position": 0,
+          "resourceId": {
+            "kind": "youtube#video",
+            "videoId": "video002official"
+          },
+          "videoOwnerChannelTitle": "Official Artist Channel",
+          "videoOwnerChannelId": "UCofficialchannel123"
+        },
+        "contentDetails": {
+          "videoId": "video002official",
+          "videoPublishedAt": "2024-02-20T14:30:00Z",
+          "duration": "PT3M45S",
+          "dimension": "2d",
+          "definition": "hd",
+          "caption": "false",
+          "licensedContent": true,
+          "regionRestriction": {
+            "allowed": ["US", "GB", "CA", "AU", "DE", "FR", "JP"]
+          }
+        },
+        "status": {
+          "privacyStatus": "public"
+        }
+      }
+    ]
+  },
+  "user_upload": {
+    "kind": "youtube#playlistItemListResponse",
+    "etag": "\"user_upload_etag_003\"",
+    "nextPageToken": null,
+    "prevPageToken": null,
+    "pageInfo": {
+      "totalResults": 1,
+      "resultsPerPage": 50
+    },
+    "items": [
+      {
+        "kind": "youtube#playlistItem",
+        "etag": "\"item_etag_003\"",
+        "id": "PLItem_003",
+        "snippet": {
+          "publishedAt": "2024-03-10T09:15:00Z",
+          "channelId": "UCuserchannel456",
+          "title": "User Upload - Song Title (Cover)",
+          "description": "User upload cover of Song Title",
+          "thumbnails": {
+            "default": {
+              "url": "https://i.ytimg.com/vi/video003/default.jpg",
+              "width": 120,
+              "height": 90
+            },
+            "medium": {
+              "url": "https://i.ytimg.com/vi/video003/mqdefault.jpg",
+              "width": 320,
+              "height": 180
+            },
+            "high": {
+              "url": "https://i.ytimg.com/vi/video003/hqdefault.jpg",
+              "width": 480,
+              "height": 360
+            }
+          },
+          "channelTitle": "User Channel",
+          "playlistId": "PLuserupload003",
+          "position": 0,
+          "resourceId": {
+            "kind": "youtube#video",
+            "videoId": "video003user"
+          },
+          "videoOwnerChannelTitle": "User Channel",
+          "videoOwnerChannelId": "UCuserchannel456"
+        },
+        "contentDetails": {
+          "videoId": "video003user",
+          "videoPublishedAt": "2024-03-10T09:15:00Z",
+          "duration": "PT5M22S",
+          "dimension": "2d",
+          "definition": "hd",
+          "caption": "false",
+          "licensedContent": false,
+          "regionRestriction": {
+            "allowed": ["US", "GB", "CA"]
+          }
+        },
+        "status": {
+          "privacyStatus": "public"
+        }
+      }
+    ]
   }
 }
