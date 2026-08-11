@@ -190,5 +190,69 @@
         }
       }
     ]
+  },
+  "remix": {
+    "kind": "youtube#playlistItemListResponse",
+    "etag": "\"remix_etag_004\"",
+    "nextPageToken": null,
+    "prevPageToken": null,
+    "pageInfo": {
+      "totalResults": 1,
+      "resultsPerPage": 50
+    },
+    "items": [
+      {
+        "kind": "youtube#playlistItem",
+        "etag": "\"item_etag_004\"",
+        "id": "PLItem_004",
+        "snippet": {
+          "publishedAt": "2024-04-05T16:45:00Z",
+          "channelId": "UCremixchannel789",
+          "title": "Song Title (Remix)",
+          "description": "Official remix of Song Title",
+          "thumbnails": {
+            "default": {
+              "url": "https://i.ytimg.com/vi/video004/default.jpg",
+              "width": 120,
+              "height": 90
+            },
+            "medium": {
+              "url": "https://i.ytimg.com/vi/video004/mqdefault.jpg",
+              "width": 320,
+              "height": 180
+            },
+            "high": {
+              "url": "https://i.ytimg.com/vi/video004/hqdefault.jpg",
+              "width": 480,
+              "height": 360
+            }
+          },
+          "channelTitle": "Remix Artist Channel",
+          "playlistId": "PLremix004",
+          "position": 0,
+          "resourceId": {
+            "kind": "youtube#video",
+            "videoId": "video004remix"
+          },
+          "videoOwnerChannelTitle": "Remix Artist Channel",
+          "videoOwnerChannelId": "UCremixchannel789"
+        },
+        "contentDetails": {
+          "videoId": "video004remix",
+          "videoPublishedAt": "2024-04-05T16:45:00Z",
+          "duration": "PT6M01S",
+          "dimension": "2d",
+          "definition": "hd",
+          "caption": "false",
+          "licensedContent": false,
+          "regionRestriction": {
+            "allowed": ["US", "GB", "CA", "AU", "DE", "FR", "JP", "BR"]
+          }
+        },
+        "status": {
+          "privacyStatus": "public"
+        }
+      }
+    ]
   }
 }
