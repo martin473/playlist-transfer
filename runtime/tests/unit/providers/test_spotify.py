@@ -452,3 +452,20 @@ class TestMapSpotifyError:
         assert isinstance(result, InvalidProviderResponse)
         assert result.service == "spotify"
         assert result.operation == "replace_items"
+
+    def test_map_spotify_error_not_found_from_message_fallback(self) -> None:
+        """Test that 'not found' in error message maps to ProviderNotFound when http_status is missing."""
+        class MockSpotifyError:
+            def __init__(self, msg):
+                self.msg = msg
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError("Playlist not found")
+        result = map_spotify_error(error, "read_items")
+
+        from playlist_bridge.providers.errors import ProviderNotFound
+        assert isinstance(result, ProviderNotFound)
+        assert result.service == "spotify"
+        assert result.operation == "read_items"
+        assert "not found" in str(result).lower()
