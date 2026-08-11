@@ -96,6 +96,98 @@ MEANINGFUL_VERSION_TERMS: Final[frozenset[str]] = frozenset({
 })
 
 
+# Version qualifier tokens that should be extracted as version information
+# These are meaningful version indicators like "remix", "live", "acoustic", etc.
+VERSION_QUALIFIER_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    # Remix variants
+    re.compile(r'\bremix\b', re.IGNORECASE),
+    re.compile(r'\bmix\b', re.IGNORECASE),
+    # Edit variants
+    re.compile(r'\bedit\b', re.IGNORECASE),
+    # Remaster variants
+    re.compile(r'\bremaster\b', re.IGNORECASE),
+    re.compile(r'\bremastered\b', re.IGNORECASE),
+    # Live
+    re.compile(r'\blive\b', re.IGNORECASE),
+    # Instrumental
+    re.compile(r'\binstrumental\b', re.IGNORECASE),
+    # Acoustic
+    re.compile(r'\bacoustic\b', re.IGNORECASE),
+    # Dub
+    re.compile(r'\bdub\b', re.IGNORECASE),
+    # Clean
+    re.compile(r'\bclean\b', re.IGNORECASE),
+    # Explicit
+    re.compile(r'\bexplicit\b', re.IGNORECASE),
+    re.compile(r'\bexplicit\b', re.IGNORECASE),
+)
+
+# Mapping of version qualifier patterns to their canonical category
+VERSION_CATEGORY_MAP: Final[dict[str, str]] = {
+    'remix': 'remix',
+    'mix': 'mix',
+    'edit': 'edit',
+    'remaster': 'remaster',
+    'remastered': 'remaster',
+    'live': 'live',
+    'instrumental': 'instrumental',
+    'acoustic': 'acoustic',
+    'dub': 'dub',
+    'clean': 'clean',
+    'explicit': 'explicit',
+}
+
+
+def extract_version_tokens(value: str) -> tuple[str, ...]:
+    """Extract meaningful version qualifier tokens from a string.
+
+    This function scans the input text for known version qualifier terms
+    (remix, mix, edit, remaster, live, instrumental, acoustic, dub, clean,
+    explicit) and returns them as a tuple. The tokens are preserved in their
+    original casing (case-folded for comparison) and each token is normalized
+    to its canonical category.
+
+    The function is designed to be used as part of the track title normalization
+    pipeline, extracting version information that can be used for matching
+    decisions.
+
+    Args:
+        value: The input string to scan for version qualifiers.
+
+    Returns:
+        A tuple of version qualifier tokens, with each token in lowercase.
+        Returns an empty tuple if no qualifiers are found.
+
+    Example:
+        >>> extract_version_tokens("Song Title (Remix)")
+        ('remix',)
+        >>> extract_version_tokens("Live Acoustic Version")
+        ('live', 'acoustic')
+        >>> extract_version_tokens("Clean Edit")
+        ('clean', 'edit')
+        >>> extract_version_tokens("No qualifiers here")
+        ()
+    """
+    if not value:
+        return ()
+
+    found_tokens = set()
+
+    # Scan for each version qualifier pattern
+    for pattern in VERSION_QUALIFIER_PATTERNS:
+        if pattern.search(value):
+            # Extract the matched text and normalize it
+            match = pattern.search(value)
+            if match:
+                token_text = match.group(0).lower()
+                # Map to canonical category if available
+                category = VERSION_CATEGORY_MAP.get(token_text, token_text)
+                found_tokens.add(category)
+
+    # Return as sorted tuple for deterministic ordering
+    return tuple(sorted(found_tokens))
+
+
 def normalize_unicode_text(value: str) -> str:
     """Normalize Unicode width, whitespace, punctuation, and separators.
 
@@ -335,3 +427,83 @@ def comparison_text(value: str) -> str:
 
     # Use Python's built-in casefold() which implements Unicode casefolding
     return value.casefold()
+
+
+def detect_unwanted_version_flags(title: str, artist_hints: Sequence[str]) -> tuple[str, ...]:
+    """Detect unwanted version indicators in a track title and artist hints.
+
+    This function scans the track title and artist hints for common unwanted
+    version indicators that may reduce match quality or indicate the track is
+    not the original/studio version. Detected flags include:
+
+        - karaoke: karaoke versions
+        - cover: cover versions (not original artist)
+        - tribute: tribute versions
+        - nightcore: nightcore sped-up versions
+        - sped-up: sped-up versions
+        - slowed: slowed-down versions
+        - reverb: reverb-heavy versions
+        - reaction: reaction videos/audio
+        - tutorial: tutorial/educational content
+        - performance: live or studio performance versions
+
+    The function checks both the title and the artist hints (if provided) for
+    these indicators and returns a deduplicated, sorted tuple of detected flags.
+
+    Args:
+        title: The track title to analyze.
+        artist_hints: A sequence of artist names to also check.
+
+    Returns:
+        A tuple of detected flag strings, deduplicated and sorted alphabetically.
+        Returns an empty tuple if no unwanted version indicators are found.
+
+    Example:
+        >>> detect_unwanted_version_flags("Song Title (Karaoke Version)", [])
+        ('karaoke',)
+        >>> detect_unwanted_version_flags("Nightcore - Song Title", [])
+        ('nightcore',)
+        >>> detect_unwanted_version_flags("Cover of Song", ["Original Artist"])
+        ('cover',)
+    """
+    if not title and not artist_hints:
+        return ()
+
+    detected = set()
+
+    # Normalize the title and artist hints for comparison
+    normalized_title = title.casefold() if title else ""
+    normalized_artists = [a.casefold() for a in artist_hints if a]
+
+    # Define flag patterns: (regex pattern, flag name)
+    # These patterns match words/phrases in the normalized text
+    flag_patterns = [
+        (re.compile(r'\bkaraoke\b'), 'karaoke'),
+        (re.compile(r'\bcover\b'), 'cover'),
+        (re.compile(r'\btribute\b'), 'tribute'),
+        (re.compile(r'\bnightcore\b'), 'nightcore'),
+        (re.compile(r'sped[\s-]*up'), 'sped-up'),  # "sped up" or "sped-up"
+        (re.compile(r'slowed[\s-]*down'), 'slowed'),  # "slowed down" or "slowed-down"
+        (re.compile(r'\bslowed\b'), 'slowed'),
+        (re.compile(r'\breverb\b'), 'reverb'),
+        (re.compile(r'\breaction\b'), 'reaction'),
+        (re.compile(r'\btutorial\b'), 'tutorial'),
+        (re.compile(r'\bperformance\b'), 'performance'),
+        # Also catch "spedup" and "sloweddown" without spaces
+        (re.compile(r'spedup'), 'sped-up'),
+        (re.compile(r'sloweddown'), 'slowed'),
+    ]
+
+    # Check the title
+    if normalized_title:
+        for pattern, flag in flag_patterns:
+            if pattern.search(normalized_title):
+                detected.add(flag)
+
+    # Check artist hints
+    for artist in normalized_artists:
+        for pattern, flag in flag_patterns:
+            if pattern.search(artist):
+                detected.add(flag)
+
+    return tuple(sorted(detected))

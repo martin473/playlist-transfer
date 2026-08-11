@@ -539,3 +539,306 @@ class TestRemovableNoisePhrases:
         
         # Ensure it's a reasonable size (at least 10 terms)
         assert len(MEANINGFUL_VERSION_TERMS) >= 10, f"Expected at least 10 meaningful terms, got {len(MEANINGFUL_VERSION_TERMS)}"
+
+
+class TestExtractVersionTokens:
+    """Tests for the extract_version_tokens function."""
+
+    def test_empty_string(self):
+        """Empty string should return empty tuple."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("") == ()
+
+    def test_no_version_tokens(self):
+        """String with no version qualifiers should return empty tuple."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Hello World") == ()
+        assert extract_version_tokens("Just a normal song title") == ()
+
+    def test_single_version_token_remix(self):
+        """Extract 'remix' token."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Song Title (Remix)") == ("remix",)
+        assert extract_version_tokens("Song Title [Remix]") == ("remix",)
+        assert extract_version_tokens("Song Title - Remix") == ("remix",)
+        assert extract_version_tokens("Song Title Remix") == ("remix",)
+
+    def test_single_version_token_live(self):
+        """Extract 'live' token."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Song Title (Live)") == ("live",)
+        assert extract_version_tokens("Song Title Live") == ("live",)
+        assert extract_version_tokens("Live Song Title") == ("live",)
+
+    def test_single_version_token_acoustic(self):
+        """Extract 'acoustic' token."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Song Title (Acoustic)") == ("acoustic",)
+        assert extract_version_tokens("Song Title Acoustic") == ("acoustic",)
+
+    def test_single_version_token_instrumental(self):
+        """Extract 'instrumental' token."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Song Title (Instrumental)") == ("instrumental",)
+        assert extract_version_tokens("Song Title Instrumental") == ("instrumental",)
+
+    def test_single_version_token_edit(self):
+        """Extract 'edit' token."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Song Title (Edit)") == ("edit",)
+        assert extract_version_tokens("Song Title Radio Edit") == ("edit",)
+
+    def test_single_version_token_remaster(self):
+        """Extract 'remaster' token."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Song Title (Remaster)") == ("remaster",)
+        assert extract_version_tokens("Song Title (Remastered)") == ("remaster",)
+
+    def test_single_version_token_dub(self):
+        """Extract 'dub' token."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Song Title (Dub)") == ("dub",)
+        assert extract_version_tokens("Song Title Dub Version") == ("dub",)
+
+    def test_single_version_token_clean(self):
+        """Extract 'clean' token."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Song Title (Clean)") == ("clean",)
+        assert extract_version_tokens("Song Title Clean Version") == ("clean",)
+
+    def test_single_version_token_explicit(self):
+        """Extract 'explicit' token."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("Song Title (Explicit)") == ("explicit",)
+        assert extract_version_tokens("Song Title Explicit") == ("explicit",)
+
+    def test_multiple_version_tokens(self):
+        """Extract multiple version tokens."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        # Multiple tokens should be returned in sorted order
+        assert extract_version_tokens("Live Acoustic Remix") == ("acoustic", "live", "remix")
+        assert extract_version_tokens("Song Title (Live Acoustic Edit)") == ("acoustic", "edit", "live")
+        assert extract_version_tokens("Clean Radio Edit") == ("clean", "edit")
+
+    def test_case_insensitivity(self):
+        """Version tokens should be case-insensitive."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        assert extract_version_tokens("song title (REMIX)") == ("remix",)
+        assert extract_version_tokens("song title (LiVe)") == ("live",)
+        assert extract_version_tokens("song title (AcOuStIc)") == ("acoustic",)
+        assert extract_version_tokens("song title (ExPlIcIt)") == ("explicit",)
+
+    def test_version_tokens_are_normalized_to_categories(self):
+        """Version tokens should be normalized to canonical categories."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        # 'remastered' should map to 'remaster'
+        assert extract_version_tokens("Song Title (Remastered)") == ("remaster",)
+        assert extract_version_tokens("Song Title Remastered Version") == ("remaster",)
+
+    def test_version_tokens_preserve_original_text(self):
+        """Version tokens should preserve the original token text (lowercased)."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        # The function returns the lowercased version of the matched token
+        assert extract_version_tokens("Song Title (REMIX)") == ("remix",)
+        assert extract_version_tokens("Song Title (Live)") == ("live",)
+        # For 'remastered', it returns the canonical category 'remaster'
+        assert extract_version_tokens("Song Title (Remastered)") == ("remaster",)
+
+    def test_no_duplicate_tokens(self):
+        """Duplicate version tokens should be deduplicated."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        # Only one instance of each token should be returned
+        result = extract_version_tokens("remix remix remix")
+        assert result == ("remix",)
+        # Different tokens should all be included
+        result = extract_version_tokens("live live acoustic acoustic")
+        assert result == ("acoustic", "live")
+
+    def test_tokens_are_sorted(self):
+        """Returned tokens should be in alphabetical order."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        result = extract_version_tokens("dub explicit clean instrumental acoustic live remix edit remaster")
+        expected = ("acoustic", "clean", "dub", "edit", "explicit", "instrumental", "live", "remaster", "remix")
+        assert result == expected
+
+    def test_version_tokens_in_complex_text(self):
+        """Extract version tokens from text with punctuation and spacing."""
+        from playlist_bridge.matching.normalize import extract_version_tokens
+        # Text with various punctuation and separators
+        assert extract_version_tokens("Song Title (Live Acoustic Remix) [Official]") == ("acoustic", "live", "remix")
+        assert extract_version_tokens("Song Title - Clean Edit (Radio Version)") == ("clean", "edit")
+        assert extract_version_tokens("Song Title // Explicit Dub Mix //") == ("dub", "explicit", "mix")
+
+
+class TestDetectUnwantedVersionFlags:
+    """Tests for the detect_unwanted_version_flags function."""
+
+    def test_empty_input(self):
+        """Empty title and artist hints should return empty tuple."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("", []) == ()
+        assert detect_unwanted_version_flags("", [""]) == ()
+
+    def test_detect_karaoke(self):
+        """Detect karaoke indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Song Title (Karaoke Version)", []) == ("karaoke",)
+        assert detect_unwanted_version_flags("Karaoke - Song Title", []) == ("karaoke",)
+        assert detect_unwanted_version_flags("Song Title (Karaoke)", []) == ("karaoke",)
+        # Case insensitive
+        assert detect_unwanted_version_flags("Song Title (KARAOKE)", []) == ("karaoke",)
+
+    def test_detect_cover(self):
+        """Detect cover indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Cover - Song Title", []) == ("cover",)
+        assert detect_unwanted_version_flags("Song Title (Cover)", []) == ("cover",)
+        assert detect_unwanted_version_flags("Song Title Cover", []) == ("cover",)
+        # Artist hints can also contain cover indicators
+        assert detect_unwanted_version_flags("Song Title", ["Cover Artist"]) == ("cover",)
+
+    def test_detect_tribute(self):
+        """Detect tribute indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Tribute to Artist - Song Title", []) == ("tribute",)
+        assert detect_unwanted_version_flags("Song Title (Tribute)", []) == ("tribute",)
+
+    def test_detect_nightcore(self):
+        """Detect nightcore indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Nightcore - Song Title", []) == ("nightcore",)
+        assert detect_unwanted_version_flags("Song Title (Nightcore Version)", []) == ("nightcore",)
+        # Case insensitive
+        assert detect_unwanted_version_flags("Song Title (NIGHTCORE)", []) == ("nightcore",)
+
+    def test_detect_sped_up(self):
+        """Detect sped-up indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Sped Up - Song Title", []) == ("sped-up",)
+        assert detect_unwanted_version_flags("Song Title (Sped Up)", []) == ("sped-up",)
+        assert detect_unwanted_version_flags("Song Title (Sped-Up)", []) == ("sped-up",)
+        assert detect_unwanted_version_flags("Spedup Song Title", []) == ("sped-up",)
+        # Case insensitive
+        assert detect_unwanted_version_flags("Song Title (SPED UP)", []) == ("sped-up",)
+
+    def test_detect_slowed(self):
+        """Detect slowed indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Slowed - Song Title", []) == ("slowed",)
+        assert detect_unwanted_version_flags("Song Title (Slowed Down)", []) == ("slowed",)
+        assert detect_unwanted_version_flags("Song Title (Slowed-Down)", []) == ("slowed",)
+        assert detect_unwanted_version_flags("Sloweddown Song Title", []) == ("slowed",)
+        # Case insensitive
+        assert detect_unwanted_version_flags("Song Title (SLOWED)", []) == ("slowed",)
+
+    def test_detect_reverb(self):
+        """Detect reverb indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Song Title (Reverb)", []) == ("reverb",)
+        assert detect_unwanted_version_flags("Reverb - Song Title", []) == ("reverb",)
+        # Case insensitive
+        assert detect_unwanted_version_flags("Song Title (REVERB)", []) == ("reverb",)
+
+    def test_detect_reaction(self):
+        """Detect reaction indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Reaction - Song Title", []) == ("reaction",)
+        assert detect_unwanted_version_flags("Song Title (Reaction)", []) == ("reaction",)
+        # Case insensitive
+        assert detect_unwanted_version_flags("Song Title (REACTION)", []) == ("reaction",)
+
+    def test_detect_tutorial(self):
+        """Detect tutorial indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Tutorial - Song Title", []) == ("tutorial",)
+        assert detect_unwanted_version_flags("Song Title (Tutorial)", []) == ("tutorial",)
+        # Case insensitive
+        assert detect_unwanted_version_flags("Song Title (TUTORIAL)", []) == ("tutorial",)
+
+    def test_detect_performance(self):
+        """Detect performance indicator."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Performance - Song Title", []) == ("performance",)
+        assert detect_unwanted_version_flags("Song Title (Performance Version)", []) == ("performance",)
+        # Case insensitive
+        assert detect_unwanted_version_flags("Song Title (PERFORMANCE)", []) == ("performance",)
+
+    def test_multiple_flags(self):
+        """Detect multiple unwanted version flags."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        result = detect_unwanted_version_flags("Nightcore Cover - Song Title (Sped Up)", [])
+        assert result == ("cover", "nightcore", "sped-up")
+        
+        result = detect_unwanted_version_flags("Karaoke Slowed Down Version", [])
+        assert result == ("karaoke", "slowed")
+        
+        result = detect_unwanted_version_flags("Song Title (Reverb + Slowed)", [])
+        assert result == ("reverb", "slowed")
+
+    def test_no_flags_detected(self):
+        """No unwanted version flags should be detected for clean titles."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("Original Song Title", []) == ()
+        assert detect_unwanted_version_flags("Song Title (Remix)", []) == ()
+        assert detect_unwanted_version_flags("Song Title (Live)", []) == ()
+        # "cover" as a meaningful version term should be detected as unwanted
+        # (it's in both MEANINGFUL_VERSION_TERMS and unwanted flags)
+        assert detect_unwanted_version_flags("Song Title (Cover)", []) == ("cover",)
+
+    def test_artist_hints_detection(self):
+        """Detect unwanted version indicators in artist hints."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        # Artist name containing "Cover" should trigger cover flag
+        assert detect_unwanted_version_flags("Song Title", ["Cover Band"]) == ("cover",)
+        # Artist name containing "Tribute" should trigger tribute flag
+        assert detect_unwanted_version_flags("Song Title", ["Tribute Ensemble"]) == ("tribute",)
+        # Artist name containing "Karaoke" should trigger karaoke flag
+        assert detect_unwanted_version_flags("Song Title", ["Karaoke Stars"]) == ("karaoke",)
+        # Multiple artists with different flags
+        assert detect_unwanted_version_flags(
+            "Song Title",
+            ["Cover Band", "Tribute Ensemble"]
+        ) == ("cover", "tribute")
+
+    def test_artist_hints_no_false_positives(self):
+        """Artist hints should not produce false positives for common words."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        # "cover" is a valid unwanted flag, so this would still trigger
+        assert detect_unwanted_version_flags("Song Title", ["Cover"]) == ("cover",)
+        # But "performance" as a word in a band name might be ambiguous
+        # The function will detect it as a performance flag if it appears
+        assert detect_unwanted_version_flags("Song Title", ["Performance Band"]) == ("performance",)
+
+    def test_case_insensitivity(self):
+        """Detection should be case-insensitive."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        assert detect_unwanted_version_flags("KARAOKE SONG", []) == ("karaoke",)
+        assert detect_unwanted_version_flags("cover song", []) == ("cover",)
+        assert detect_unwanted_version_flags("NIGHTCORE SONG", []) == ("nightcore",)
+        assert detect_unwanted_version_flags("SPED UP SONG", []) == ("sped-up",)
+        assert detect_unwanted_version_flags("SLOWED SONG", []) == ("slowed",)
+
+    def test_deduplication(self):
+        """Duplicate flags should be deduplicated."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        # Both title and artist hints contain the same flag
+        result = detect_unwanted_version_flags(
+            "Cover Song Title",
+            ["Cover Band"]
+        )
+        assert result == ("cover",)
+        
+        # Multiple instances of the same flag in title
+        result = detect_unwanted_version_flags("Cover Cover Cover Song", [])
+        assert result == ("cover",)
+
+    def test_sorted_output(self):
+        """Detected flags should be sorted alphabetically."""
+        from playlist_bridge.matching.normalize import detect_unwanted_version_flags
+        result = detect_unwanted_version_flags(
+            "Nightcore Reverb Cover - Song Title (Sped Up)",
+            []
+        )
+        # Alphabetical order: cover, nightcore, reverb, sped-up
+        expected = ("cover", "nightcore", "reverb", "sped-up")
+        assert result == expected
