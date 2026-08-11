@@ -1,9 +1,12 @@
-"""Job runner and job ID generation for playlist-bridge."""
+"""Job runner and job creation for playlist-bridge."""
 
 import json
 import uuid
+from datetime import datetime
 from typing import NamedTuple, Sequence, TextIO, Union
 
+from playlist_bridge.domain.models import TransferRequest
+from playlist_bridge.ports import JobRepository
 from playlist_bridge.domain.events import JobEvent, JobEventAdapter
 from playlist_bridge.domain.models import SourceTrack, MatchDecision, SpotifyCandidate
 
@@ -55,6 +58,56 @@ def validate_job_id(job_id: Union[str, None]) -> bool:
         return True
     except ValueError:
         return False
+
+
+def create_transfer_job(
+    request: TransferRequest,
+    jobs: JobRepository,
+    now: datetime,
+) -> str:
+    """Create and persist a transfer job in the pending state.
+
+    This function creates a new job record from a transfer request and persists
+    it using the provided JobRepository. The job is created in the "pending"
+    state before any provider calls are made.
+
+    Args:
+        request: The transfer request containing source/destination details.
+        jobs: The JobRepository implementation for persistence.
+        now: The current timestamp (timezone-aware) for job creation.
+
+    Returns:
+        The job_id of the newly created job (as a hex string).
+
+    Raises:
+        ValueError: If the request is invalid.
+        IntegrityError: If a job with the generated ID already exists.
+
+    Examples:
+        >>> from datetime import datetime, timezone
+        >>> from playlist_bridge.domain.models import TransferRequest
+        >>> from playlist_bridge.domain.enums import TransferMode
+        >>> request = TransferRequest(
+        ...     source_service="youtube",
+        ...     source_playlist_id="PLabc123",
+        ...     destination_service="spotify",
+        ...     transfer_mode=TransferMode.CREATE,
+        ...     destination_name="My Playlist",
+        ... )
+        >>> job_id = create_transfer_job(request, jobs, datetime.now(timezone.utc))
+        >>> isinstance(job_id, str)
+        True
+        >>> len(job_id) == 32
+        True
+    """
+    # Generate a new job ID
+    job_id = new_job_id()
+
+    # Persist the job using the repository
+    job_record = jobs.create(request, job_id, now)
+
+    # Return the job ID
+    return job_record.id
 
 
 class JsonlEventEmitter:
@@ -156,15 +209,31 @@ def calculate_transfer_counts(
         ...     source_item_id="abc123",
         ...     status="matched",
         ...     selected_candidate=candidate1,
-        ...     score=score1,
-        ...     reason="Good match",
+        ...     match_score=score1,
         ... )
-        >>> counts = calculate_transfer_counts([track1], [decision1])
+        >>> track2 = SourceTrack(
+        ...     position=1,
+        ...     title="Song 2",
+        ...     artist_names=["Artist 2"],
+        ...     duration_seconds=200,
+        ...     video_id="def456",
+        ...     availability="available",
+        ... )
+        >>> decision2 = MatchDecision(
+        ...     source_item_id="def456",
+        ...     status="unmatched",
+        ...     selected_candidate=None,
+        ...     match_score=None,
+        ... )
+        >>> counts = calculate_transfer_counts([track1, track2], [decision1, decision2])
         >>> counts.matched
         1
         >>> counts.unmatched
-        0
+        1
     """
+    if not tracks and not decisions:
+        return TransferCounts(0, 0, 0, 0, 0, 0)
+
     # Build lookup from source_item_id to decision
     decision_lookup: dict[str, MatchDecision] = {}
     for decision in decisions:
@@ -181,6 +250,7 @@ def calculate_transfer_counts(
     non_track = 0
 
     for track in tracks:
+        # Use video_id as the source_item_id
         source_id = track.video_id
         decision = decision_lookup.get(source_id)
 
@@ -197,19 +267,20 @@ def calculate_transfer_counts(
             unmatched += 1
             continue
 
-        # Use status and selected_candidate to determine the outcome
-        # For "matched" status with selected_candidate, count as matched
+        # Count by decision status
         if decision.status == "matched" and decision.selected_candidate is not None:
             matched += 1
+        elif decision.status == "ambiguous":
+            ambiguous += 1
         elif decision.status == "unmatched":
-            # If status is explicitly unmatched, count as unmatched
             unmatched += 1
+        elif decision.status == "skipped":
+            skipped += 1
+        elif decision.status == "non_track":
+            non_track += 1
         else:
-            # Fallback: if status is unknown, check if there's a selected_candidate
-            if decision.selected_candidate is not None:
-                matched += 1
-            else:
-                unmatched += 1
+            # Fallback: treat as unmatched
+            unmatched += 1
 
     return TransferCounts(
         matched=matched,
@@ -225,26 +296,29 @@ def accepted_uris_in_source_order(
     tracks: Sequence[SourceTrack],
     decisions: Sequence[MatchDecision],
 ) -> list[str]:
-    """Return accepted Spotify URIs in source position order.
+    """Extract accepted URIs from decisions in source playlist order.
 
-    This function filters source tracks by their match decisions, returning only
-    accepted tracks (those with status == "matched" and selected_candidate present)
-    while excluding unavailable, skipped, ambiguous, and unmatched items. The results
-    maintain the original source playlist order, and duplicate source items remain
-    duplicated unless a later explicit deduplication option is enabled.
+    This function returns the URIs of accepted Spotify candidates in the order
+    they appear in the source playlist. Tracks that are unmatched, unavailable,
+    skipped, or ambiguous are omitted.
 
     Args:
         tracks: Sequence of SourceTrack objects in source playlist order.
         decisions: Sequence of MatchDecision objects for the tracks.
 
     Returns:
-        List of Spotify URIs for accepted tracks, in source position order.
-
-    Raises:
-        ValueError: If tracks or decisions are invalid (e.g., mismatched).
+        List of Spotify URIs in source order.
 
     Examples:
-        >>> from playlist_bridge.domain.models import MatchScore, SpotifyCandidate
+        >>> from playlist_bridge.domain.models import MatchScore, SpotifyCandidate, SourceTrack, MatchDecision
+        >>> track1 = SourceTrack(
+        ...     position=0,
+        ...     title="Song 1",
+        ...     artist_names=["Artist 1"],
+        ...     duration_seconds=180,
+        ...     video_id="abc123",
+        ...     availability="available",
+        ... )
         >>> candidate1 = SpotifyCandidate(
         ...     track_id="xyz789",
         ...     uri="spotify:track:xyz789",
@@ -264,13 +338,11 @@ def accepted_uris_in_source_order(
         ...     total_score=0.95,
         ...     reasons=["Good match"],
         ... )
-        >>> track1 = SourceTrack(
-        ...     position=0,
-        ...     title="Song 1",
-        ...     artist_names=["Artist 1"],
-        ...     duration_seconds=180,
-        ...     video_id="abc123",
-        ...     availability="available",
+        >>> decision1 = MatchDecision(
+        ...     source_item_id="abc123",
+        ...     status="matched",
+        ...     selected_candidate=candidate1,
+        ...     match_score=score1,
         ... )
         >>> track2 = SourceTrack(
         ...     position=1,
@@ -280,17 +352,11 @@ def accepted_uris_in_source_order(
         ...     video_id="def456",
         ...     availability="available",
         ... )
-        >>> decision1 = MatchDecision(
-        ...     source_item_id="abc123",
-        ...     status="matched",
-        ...     selected_candidate=candidate1,
-        ...     score=score1,
-        ...     reason="Good match",
-        ... )
         >>> decision2 = MatchDecision(
         ...     source_item_id="def456",
         ...     status="unmatched",
-        ...     reason="No suitable match",
+        ...     selected_candidate=None,
+        ...     match_score=None,
         ... )
         >>> accepted_uris_in_source_order([track1, track2], [decision1, decision2])
         ['spotify:track:xyz789']
