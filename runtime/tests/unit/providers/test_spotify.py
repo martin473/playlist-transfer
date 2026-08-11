@@ -3,7 +3,9 @@
 import pytest
 from typing import List, Sequence
 
-from playlist_bridge.providers.spotify import chunk_uris, SpotifyAdapter
+from spotipy.exceptions import SpotifyException
+
+from playlist_bridge.providers.spotify import chunk_uris, SpotifyAdapter, map_spotify_error
 from playlist_bridge.domain.models import AccountProfile, SpotifyCandidate, PlaylistReference
 from playlist_bridge.providers.errors import (
     AuthenticationRequired,
@@ -279,3 +281,174 @@ class TestChunkUris:
         chunks = chunk_uris(uris, 100)
         assert len(chunks) == 1
         assert chunks[0] == ("a", "b", "c")
+
+
+class TestMapSpotifyError:
+    """Tests for map_spotify_error function."""
+
+    def test_map_spotify_error_401_authentication_required(self) -> None:
+        """Test that 401 status maps to AuthenticationRequired."""
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError(401, "Authentication failed")
+        result = map_spotify_error(error, "search_tracks")
+
+        from playlist_bridge.providers.errors import AuthenticationRequired
+        assert isinstance(result, AuthenticationRequired)
+        assert result.service == "spotify"
+        assert result.operation == "search_tracks"
+        assert "authentication" in str(result).lower()
+
+    def test_map_spotify_error_authentication_from_message(self) -> None:
+        """Test that authentication-related message maps to AuthenticationRequired."""
+        class MockSpotifyError:
+            def __init__(self, msg):
+                self.msg = msg
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError("Invalid authorization token")
+        result = map_spotify_error(error, "create_playlist")
+
+        from playlist_bridge.providers.errors import AuthenticationRequired
+        assert isinstance(result, AuthenticationRequired)
+        assert result.service == "spotify"
+        assert result.operation == "create_playlist"
+
+    def test_map_spotify_error_403_permission_denied(self) -> None:
+        """Test that 403 status maps to PermissionDenied."""
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError(403, "Insufficient scope")
+        result = map_spotify_error(error, "add_items")
+
+        from playlist_bridge.providers.errors import PermissionDenied
+        assert isinstance(result, PermissionDenied)
+        assert result.service == "spotify"
+        assert result.operation == "add_items"
+        assert "permission" in str(result).lower()
+        assert "spotify" in str(result).lower()
+        assert "add_items" in str(result)
+
+    def test_map_spotify_error_403_permission_denied_safe_message(self) -> None:
+        """Test that permission denied error contains a safe message without sensitive details."""
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError(403, "Insufficient scope for user: john_doe@example.com")
+        result = map_spotify_error(error, "create_playlist")
+
+        from playlist_bridge.providers.errors import PermissionDenied
+        assert isinstance(result, PermissionDenied)
+        assert result.service == "spotify"
+        assert result.operation == "create_playlist"
+        message = str(result)
+        assert "permission" in message.lower()
+        assert "spotify" in message.lower()
+        assert "john_doe" not in message
+        assert "example.com" not in message
+
+    def test_map_spotify_error_404_not_found(self) -> None:
+        """Test that 404 status maps to ProviderNotFound."""
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError(404, "Playlist not found")
+        result = map_spotify_error(error, "read_items")
+
+        from playlist_bridge.providers.errors import ProviderNotFound
+        assert isinstance(result, ProviderNotFound)
+        assert result.service == "spotify"
+        assert result.operation == "read_items"
+
+    def test_map_spotify_error_429_rate_limited(self) -> None:
+        """Test that 429 status maps to RateLimited."""
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError(429, "Rate limit exceeded")
+        result = map_spotify_error(error, "search_tracks")
+
+        from playlist_bridge.providers.errors import RateLimited
+        assert isinstance(result, RateLimited)
+        assert result.service == "spotify"
+        assert result.operation == "search_tracks"
+
+    def test_map_spotify_error_500_temporary_failure(self) -> None:
+        """Test that 5xx status maps to TemporaryProviderFailure."""
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError(503, "Service unavailable")
+        result = map_spotify_error(error, "user_playlists")
+
+        from playlist_bridge.providers.errors import TemporaryProviderFailure
+        assert isinstance(result, TemporaryProviderFailure)
+        assert result.service == "spotify"
+        assert result.operation == "user_playlists"
+
+    def test_map_spotify_error_unknown_status_invalid_response(self) -> None:
+        """Test that unknown status maps to InvalidProviderResponse."""
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError(418, "I'm a teapot")
+        result = map_spotify_error(error, "identity")
+
+        from playlist_bridge.providers.errors import InvalidProviderResponse
+        assert isinstance(result, InvalidProviderResponse)
+        assert result.service == "spotify"
+        assert result.operation == "identity"
+
+    def test_map_spotify_error_without_http_status_fallback(self) -> None:
+        """Test fallback behavior when http_status is not available."""
+        class MockSpotifyError:
+            def __init__(self, msg):
+                self.msg = msg
+            def __str__(self):
+                return self.msg
+
+        error = MockSpotifyError("Something unexpected happened")
+        result = map_spotify_error(error, "replace_items")
+
+        from playlist_bridge.providers.errors import InvalidProviderResponse
+        assert isinstance(result, InvalidProviderResponse)
+        assert result.service == "spotify"
+        assert result.operation == "replace_items"
