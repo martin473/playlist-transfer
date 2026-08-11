@@ -2,6 +2,72 @@
 
 import re
 import unicodedata
+from typing import Final
+
+
+# Removable media-label phrases that should be stripped from track titles
+# These are common decorations like "Official Video", "Lyrics", "HD", etc.
+# Note: "remix", "live", and similar meaningful version terms are NOT included
+# as they should be preserved as part of the track title.
+REMOVABLE_NOISE_PHRASES: Final[frozenset[str]] = frozenset({
+    # Official/unofficial designations
+    "official video",
+    "official audio",
+    "official music video",
+    "official lyric video",
+    "official visualizer",
+    "official",
+    
+    # Quality indicators
+    "hd",
+    "hq",
+    "4k",
+    "1080p",
+    "720p",
+    "high quality",
+    "high definition",
+    
+    # Visualizer and audio-only tags
+    "visualizer",
+    "audio",
+    "audio only",
+    "audio version",
+    
+    # Lyrics
+    "lyrics",
+    "lyric video",
+    "lyrics video",
+    "with lyrics",
+    
+    # Label upload decorations
+    "label",
+    "upload",
+    "official upload",
+    "label upload",
+    
+    # Common media tags
+    "music video",
+    "video",
+    "official video",
+    "official audio",
+    
+    # Remaster indicators (often just noise, but can be meaningful)
+    "remastered",
+    "remaster",
+    
+    # Other common decorations (not including "remix" or "live")
+    "album version",
+    "single version",
+    "radio edit",
+    "extended mix",
+    "radio mix",
+    "club mix",
+    "dub mix",
+    "instrumental",
+    "acoustic",
+    "cover",
+    "tribute",
+})
 
 
 def normalize_unicode_text(value: str) -> str:

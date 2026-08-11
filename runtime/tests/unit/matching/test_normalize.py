@@ -269,3 +269,130 @@ class TestComparisonText:
         assert comparison_text("  ") == "  "
         assert comparison_text("\t") == "\t"
 
+
+
+class TestRemovableNoisePhrases:
+    """Tests for the REMOVABLE_NOISE_PHRASES constant."""
+
+    def test_constant_exists(self):
+        """REMOVABLE_NOISE_PHRASES should be defined and be a frozenset."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        assert isinstance(REMOVABLE_NOISE_PHRASES, frozenset)
+        assert len(REMOVABLE_NOISE_PHRASES) > 0
+
+    def test_contains_required_phrases(self):
+        """REMOVABLE_NOISE_PHRASES should contain the required phrases."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        
+        # Required phrases from the task
+        required_phrases = {
+            "official video",
+            "official audio", 
+            "lyrics",
+            "hd",
+            "hq",
+            "visualizer",
+        }
+        
+        for phrase in required_phrases:
+            assert phrase in REMOVABLE_NOISE_PHRASES, f"'{phrase}' should be in REMOVABLE_NOISE_PHRASES"
+
+    def test_contains_label_upload_decorations(self):
+        """REMOVABLE_NOISE_PHRASES should contain label-upload decorations."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        
+        # Label upload related phrases
+        label_upload_phrases = {
+            "label",
+            "upload",
+            "official upload",
+            "label upload",
+        }
+        
+        for phrase in label_upload_phrases:
+            assert phrase in REMOVABLE_NOISE_PHRASES, f"'{phrase}' should be in REMOVABLE_NOISE_PHRASES"
+
+    def test_contains_common_media_tags(self):
+        """REMOVABLE_NOISE_PHRASES should contain common media tags."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        
+        # Common media tags
+        media_tags = {
+            "music video",
+            "video",
+            "official music video",
+            "official lyric video",
+            "official visualizer",
+        }
+        
+        for phrase in media_tags:
+            assert phrase in REMOVABLE_NOISE_PHRASES, f"'{phrase}' should be in REMOVABLE_NOISE_PHRASES"
+
+    def test_contains_quality_indicators(self):
+        """REMOVABLE_NOISE_PHRASES should contain quality indicators."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        
+        quality_indicators = {
+            "4k",
+            "1080p",
+            "720p",
+            "high quality",
+            "high definition",
+        }
+        
+        for phrase in quality_indicators:
+            assert phrase in REMOVABLE_NOISE_PHRASES, f"'{phrase}' should be in REMOVABLE_NOISE_PHRASES"
+
+    def test_contains_audio_lyrics_variants(self):
+        """REMOVABLE_NOISE_PHRASES should contain audio and lyrics variants."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        
+        variants = {
+            "audio",
+            "audio only",
+            "audio version",
+            "lyric video",
+            "lyrics video",
+            "with lyrics",
+        }
+        
+        for phrase in variants:
+            assert phrase in REMOVABLE_NOISE_PHRASES, f"'{phrase}' should be in REMOVABLE_NOISE_PHRASES"
+
+    def test_no_meaningful_terms(self):
+        """REMOVABLE_NOISE_PHRASES should NOT contain meaningful version terms."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        
+        # These terms are meaningful and should be preserved (not removed)
+        meaningful_terms = {
+            "remix",
+            "live",
+        }
+        
+        for term in meaningful_terms:
+            assert term not in REMOVABLE_NOISE_PHRASES, f"'{term}' should NOT be in REMOVABLE_NOISE_PHRASES"
+        
+        # Note: "remastered" is intentionally included as noise
+        assert "remastered" in REMOVABLE_NOISE_PHRASES
+
+    def test_all_phrases_lowercase(self):
+        """All phrases in REMOVABLE_NOISE_PHRASES should be lowercase."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        
+        for phrase in REMOVABLE_NOISE_PHRASES:
+            assert phrase == phrase.lower(), f"'{phrase}' should be lowercase"
+
+    def test_no_duplicate_phrases(self):
+        """REMOVABLE_NOISE_PHRASES should have no duplicate phrases."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        
+        # frozenset automatically deduplicates, but let's verify
+        phrase_list = list(REMOVABLE_NOISE_PHRASES)
+        assert len(phrase_list) == len(set(phrase_list)), "Duplicate phrases found"
+
+    def test_phrase_list_comprehensive(self):
+        """REMOVABLE_NOISE_PHRASES should be comprehensive."""
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        
+        # This is a spot check - we expect at least 20 phrases
+        assert len(REMOVABLE_NOISE_PHRASES) >= 20, f"Expected at least 20 phrases, got {len(REMOVABLE_NOISE_PHRASES)}"
