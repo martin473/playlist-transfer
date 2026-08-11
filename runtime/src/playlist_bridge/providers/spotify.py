@@ -1230,3 +1230,77 @@ def create_spotify_playlist(
 
     except SpotifyException as e:
         raise map_spotify_error(e, "create_spotify_playlist")
+
+
+def add_uri_batch(
+    client: Spotify,
+    playlist_id: str,
+    uris: Sequence[str],
+) -> str:
+    """Add one ordered batch to a destination playlist and return its new snapshot ID.
+
+    This function adds a batch of track URIs to a Spotify playlist. It is designed
+    to be called for each chunk from chunk_uris, preserving order within the batch.
+    The operation is synchronous and returns the snapshot ID of the updated playlist.
+
+    Args:
+        client: An authenticated Spotipy client instance.
+        playlist_id: The ID of the playlist to add items to.
+        uris: Sequence of Spotify track URIs to add to the playlist.
+              Must not be empty.
+
+    Returns:
+        str: The new snapshot ID of the playlist after the addition.
+
+    Raises:
+        ValueError: If the uris sequence is empty (rejected before any API call).
+        AuthenticationRequired: If the user is not authenticated with Spotify.
+        PermissionDenied: If the user lacks permission to modify the playlist.
+        ProviderNotFound: If the Spotify API endpoint is not available.
+        RateLimited: If the Spotify API rate limit has been exceeded.
+        InvalidProviderResponse: If the provider returns malformed data.
+        TemporaryProviderFailure: If the Spotify API is temporarily unavailable.
+
+    Example:
+        >>> snapshot_id = add_uri_batch(
+        ...     client=spotify_client,
+        ...     playlist_id="37i9dQZF1DXcBWIGoYBM5M",
+        ...     uris=["spotify:track:4iV5W9uYEdYUVa79Axb7Rh"]
+        ... )
+    """
+    # Reject empty batch before any API call (per 094.02 acceptance)
+    if not uris:
+        raise ValueError("add_uri_batch received empty uris sequence")
+
+    try:
+        # Convert to list for spotipy API
+        items = list(uris)
+
+        # Add items to the playlist at the end (position 0 is appended by default)
+        result = client.playlist_add_items(
+            playlist_id=playlist_id,
+            items=items,
+        )
+
+        # According to Spotify API, playlist_add_items returns the snapshot_id
+        # as a string on success. If result is None, raise InvalidProviderResponse.
+        if result is None:
+            raise InvalidProviderResponse(
+                "spotify",
+                "add_uri_batch",
+                "Spotify returned null response for playlist_add_items"
+            )
+
+        # The snapshot_id is the direct return value from playlist_add_items
+        # It should be a string. If not, raise InvalidProviderResponse.
+        if not isinstance(result, str):
+            raise InvalidProviderResponse(
+                "spotify",
+                "add_uri_batch",
+                f"Spotify returned non-string snapshot_id: {type(result).__name__}"
+            )
+
+        return result
+
+    except SpotifyException as e:
+        raise map_spotify_error(e, "add_uri_batch")

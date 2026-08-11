@@ -1400,3 +1400,50 @@ def test_create_spotify_playlist_missing_name_fallback() -> None:
 
     # Should use the provided name as fallback
     assert result.name == "Provided Name"
+
+
+def test_add_uri_batch_rejects_empty_batch() -> None:
+    """Test that add_uri_batch rejects empty uris before any API call.
+
+    This test verifies the acceptance criterion for micro-step 094.02:
+    "An empty batch is rejected before any API call."
+
+    The function should raise ValueError immediately when uris is empty,
+    without making any network request to the Spotify API.
+    """
+    from playlist_bridge.providers.spotify import add_uri_batch
+
+    mock_client = MagicMock()
+
+    with pytest.raises(ValueError) as exc_info:
+        add_uri_batch(
+            client=mock_client,
+            playlist_id="test_playlist_123",
+            uris=[],
+        )
+
+    assert "empty uris sequence" in str(exc_info.value)
+    # Verify that no API call was made
+    mock_client.playlist_add_items.assert_not_called()
+
+
+def test_add_uri_batch_returns_snapshot_id() -> None:
+    """Test that add_uri_batch returns the snapshot ID from the API response."""
+    from playlist_bridge.providers.spotify import add_uri_batch
+
+    mock_client = MagicMock()
+    expected_snapshot = "snapshot_abc123xyz"
+    mock_client.playlist_add_items.return_value = expected_snapshot
+
+    uris = ["spotify:track:abc123", "spotify:track:def456"]
+    result = add_uri_batch(
+        client=mock_client,
+        playlist_id="test_playlist_123",
+        uris=uris,
+    )
+
+    assert result == expected_snapshot
+    mock_client.playlist_add_items.assert_called_once_with(
+        playlist_id="test_playlist_123",
+        items=uris,
+    )
