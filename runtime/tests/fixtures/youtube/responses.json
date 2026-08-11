@@ -510,5 +510,121 @@
         }
       }
     ]
+  },
+  "duplicate_item": {
+    "kind": "youtube#playlistItemListResponse",
+    "etag": "\"duplicate_item_etag_009\"",
+    "nextPageToken": null,
+    "prevPageToken": null,
+    "pageInfo": {
+      "totalResults": 2,
+      "resultsPerPage": 50
+    },
+    "items": [
+      {
+        "kind": "youtube#playlistItem",
+        "etag": "\"item_etag_009a\"",
+        "id": "PLItem_009a",
+        "snippet": {
+          "publishedAt": "2024-04-01T10:00:00Z",
+          "channelId": "UCduplicatechannel205",
+          "title": "Duplicate Video - First Entry",
+          "description": "This video appears multiple times in the playlist",
+          "thumbnails": {
+            "default": {
+              "url": "https://i.ytimg.com/vi/video009/default.jpg",
+              "width": 120,
+              "height": 90
+            },
+            "medium": {
+              "url": "https://i.ytimg.com/vi/video009/mqdefault.jpg",
+              "width": 320,
+              "height": 180
+            },
+            "high": {
+              "url": "https://i.ytimg.com/vi/video009/hqdefault.jpg",
+              "width": 480,
+              "height": 360
+            }
+          },
+          "channelTitle": "Duplicate Playlist Channel",
+          "playlistId": "PLduplicate009",
+          "position": 0,
+          "resourceId": {
+            "kind": "youtube#video",
+            "videoId": "video009duplicate"
+          },
+          "videoOwnerChannelTitle": "Duplicate Playlist Channel",
+          "videoOwnerChannelId": "UCduplicatechannel205"
+        },
+        "contentDetails": {
+          "videoId": "video009duplicate",
+          "videoPublishedAt": "2024-04-01T10:00:00Z",
+          "duration": "PT4M30S",
+          "dimension": "2d",
+          "definition": "hd",
+          "caption": "false",
+          "licensedContent": false,
+          "regionRestriction": {
+            "allowed": ["US", "GB", "CA", "AU", "DE"]
+          }
+        },
+        "status": {
+          "privacyStatus": "public"
+        }
+      },
+      {
+        "kind": "youtube#playlistItem",
+        "etag": "\"item_etag_009b\"",
+        "id": "PLItem_009b",
+        "snippet": {
+          "publishedAt": "2024-04-01T10:00:00Z",
+          "channelId": "UCduplicatechannel205",
+          "title": "Duplicate Video - Second Entry",
+          "description": "This video appears multiple times in the playlist",
+          "thumbnails": {
+            "default": {
+              "url": "https://i.ytimg.com/vi/video009/default.jpg",
+              "width": 120,
+              "height": 90
+            },
+            "medium": {
+              "url": "https://i.ytimg.com/vi/video009/mqdefault.jpg",
+              "width": 320,
+              "height": 180
+            },
+            "high": {
+              "url": "https://i.ytimg.com/vi/video009/hqdefault.jpg",
+              "width": 480,
+              "height": 360
+            }
+          },
+          "channelTitle": "Duplicate Playlist Channel",
+          "playlistId": "PLduplicate009",
+          "position": 1,
+          "resourceId": {
+            "kind": "youtube#video",
+            "videoId": "video009duplicate"
+          },
+          "videoOwnerChannelTitle": "Duplicate Playlist Channel",
+          "videoOwnerChannelId": "UCduplicatechannel205"
+        },
+        "contentDetails": {
+          "videoId": "video009duplicate",
+          "videoPublishedAt": "2024-04-01T10:00:00Z",
+          "duration": "PT4M30S",
+          "dimension": "2d",
+          "definition": "hd",
+          "caption": "false",
+          "licensedContent": false,
+          "regionRestriction": {
+            "allowed": ["US", "GB", "CA", "AU", "DE"]
+          }
+        },
+        "status": {
+          "privacyStatus": "public"
+        }
+      }
+    ]
   }
 }
