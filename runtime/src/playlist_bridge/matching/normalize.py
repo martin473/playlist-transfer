@@ -55,18 +55,44 @@ REMOVABLE_NOISE_PHRASES: Final[frozenset[str]] = frozenset({
     "remastered",
     "remaster",
     
-    # Other common decorations (not including "remix" or "live")
-    "album version",
-    "single version",
+    # Other common decorations (not including meaningful version terms)
+    "tribute",
+})
+
+# Meaningful version terms that should be preserved as part of track titles
+# These indicate specific versions or arrangements that are semantically significant
+# and should NOT be removed as noise during title normalization.
+MEANINGFUL_VERSION_TERMS: Final[frozenset[str]] = frozenset({
+    "remix",
+    "live",
+    "acoustic",
+    "instrumental",
+    "cover",
+    "extended",
     "radio edit",
-    "extended mix",
-    "radio mix",
     "club mix",
     "dub mix",
-    "instrumental",
-    "acoustic",
-    "cover",
-    "tribute",
+    "album version",
+    "single version",
+    "mix",
+    "version",
+    "edit",
+    "reprise",
+    "medley",
+    "megamix",
+    "mashup",
+    "bootleg",
+    "unplugged",
+    "piano version",
+    "orchestral",
+    "string version",
+    "electronic",
+    "dance",
+    "house",
+    "techno",
+    "dub",
+    "drum & bass",
+    "jungle",
 })
 
 

@@ -361,19 +361,16 @@ class TestRemovableNoisePhrases:
 
     def test_no_meaningful_terms(self):
         """REMOVABLE_NOISE_PHRASES should NOT contain meaningful version terms."""
-        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES
+        from playlist_bridge.matching.normalize import REMOVABLE_NOISE_PHRASES, MEANINGFUL_VERSION_TERMS
         
         # These terms are meaningful and should be preserved (not removed)
-        meaningful_terms = {
-            "remix",
-            "live",
-        }
-        
-        for term in meaningful_terms:
+        # Use the actual constant for comprehensive checking
+        for term in MEANINGFUL_VERSION_TERMS:
             assert term not in REMOVABLE_NOISE_PHRASES, f"'{term}' should NOT be in REMOVABLE_NOISE_PHRASES"
         
-        # Note: "remastered" is intentionally included as noise
-        assert "remastered" in REMOVABLE_NOISE_PHRASES
+        # Additionally, verify that "remastered" is NOT in MEANINGFUL_VERSION_TERMS
+        # since we treat it as noise in the removable set
+        assert "remastered" not in MEANINGFUL_VERSION_TERMS
 
     def test_all_phrases_lowercase(self):
         """All phrases in REMOVABLE_NOISE_PHRASES should be lowercase."""
@@ -396,3 +393,21 @@ class TestRemovableNoisePhrases:
         
         # This is a spot check - we expect at least 20 phrases
         assert len(REMOVABLE_NOISE_PHRASES) >= 20, f"Expected at least 20 phrases, got {len(REMOVABLE_NOISE_PHRASES)}"
+
+    def test_meaningful_version_terms_defined(self):
+        """MEANINGFUL_VERSION_TERMS should be defined and contain expected terms."""
+        from playlist_bridge.matching.normalize import MEANINGFUL_VERSION_TERMS
+        
+        # Verify the constant exists and is a frozenset
+        assert isinstance(MEANINGFUL_VERSION_TERMS, frozenset), "Should be a frozenset"
+        
+        # Verify it contains at least the core meaningful terms
+        expected_core_terms = {"remix", "live", "acoustic", "instrumental", "cover"}
+        for term in expected_core_terms:
+            assert term in MEANINGFUL_VERSION_TERMS, f"'{term}' should be in MEANINGFUL_VERSION_TERMS"
+        
+        # Verify "remastered" is NOT in the meaningful terms (it's treated as noise)
+        assert "remastered" not in MEANINGFUL_VERSION_TERMS, "remastered should not be in MEANINGFUL_VERSION_TERMS"
+        
+        # Ensure it's a reasonable size (at least 10 terms)
+        assert len(MEANINGFUL_VERSION_TERMS) >= 10, f"Expected at least 10 meaningful terms, got {len(MEANINGFUL_VERSION_TERMS)}"
