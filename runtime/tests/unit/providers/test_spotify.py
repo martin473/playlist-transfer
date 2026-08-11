@@ -401,6 +401,64 @@ class TestMapSpotifyError:
         assert result.service == "spotify"
         assert result.operation == "search_tracks"
 
+    def test_map_spotify_error_429_preserves_retry_after(self) -> None:
+        """Test that 429 mapping preserves Retry-After metadata."""
+        class MockSpotifyError:
+            def __init__(self, http_status, msg, headers=None):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+                self.headers = headers or {}
+            def __str__(self):
+                return self.msg
+
+        operation = "search_tracks"
+        error = MockSpotifyError(429, "Rate limit exceeded", {"Retry-After": "60"})
+        result = map_spotify_error(error, operation)
+
+        from playlist_bridge.providers.errors import RateLimited
+        assert isinstance(result, RateLimited)
+        assert result.service == "spotify"
+        assert result.operation == operation
+        # Verify retry-after data is preserved in the error message
+        message = str(result)
+        assert "Retry-After" in message
+        assert "60" in message
+
+    def test_map_spotify_error_429_preserves_retry_after_from_resp(self) -> None:
+        """Test that 429 mapping preserves Retry-After metadata when available via resp attribute."""
+        class MockHeaders:
+            def __init__(self):
+                self._headers = {"Retry-After": "120"}
+            def get(self, key, default=None):
+                return self._headers.get(key, default)
+
+        class MockResp:
+            def __init__(self):
+                self.headers = MockHeaders()
+
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+                self.resp = MockResp()
+            def __str__(self):
+                return self.msg
+
+        operation = "add_items"
+        error = MockSpotifyError(429, "Rate limit exceeded")
+        result = map_spotify_error(error, operation)
+
+        from playlist_bridge.providers.errors import RateLimited
+        assert isinstance(result, RateLimited)
+        assert result.service == "spotify"
+        assert result.operation == operation
+        # Verify retry-after data is preserved in the error message
+        message = str(result)
+        assert "Retry-After" in message
+        assert "120" in message
+
     def test_map_spotify_error_500_temporary_failure(self) -> None:
         """Test that 5xx status maps to TemporaryProviderFailure."""
         class MockSpotifyError:
@@ -469,3 +527,32 @@ class TestMapSpotifyError:
         assert result.service == "spotify"
         assert result.operation == "read_items"
         assert "not found" in str(result).lower()
+
+    def test_map_spotify_error_server_errors_retryable(self) -> None:
+        """Test that all 5xx server errors map to retryable TemporaryProviderFailure.
+
+        This verifies that retryable server failures (500, 502, 503, 504)
+        are properly mapped to TemporaryProviderFailure, which indicates
+        the error is retryable by type.
+        """
+        class MockSpotifyError:
+            def __init__(self, http_status, msg):
+                self.http_status = http_status
+                self.msg = msg
+                self.code = http_status
+            def __str__(self):
+                return self.msg
+
+        from playlist_bridge.providers.errors import TemporaryProviderFailure
+
+        # Test multiple 5xx status codes
+        server_errors = [500, 502, 503, 504]
+        for status in server_errors:
+            error = MockSpotifyError(status, f"Server error {status}")
+            result = map_spotify_error(error, "search_tracks")
+            assert isinstance(result, TemporaryProviderFailure), (
+                f"Status {status} should map to TemporaryProviderFailure"
+            )
+            assert result.service == "spotify"
+            assert result.operation == "search_tracks"
+            assert str(status) in str(result)
