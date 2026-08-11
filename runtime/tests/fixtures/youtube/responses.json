@@ -1,0 +1,66 @@
+{
+  "official_audio": {
+    "kind": "youtube#playlistItemListResponse",
+    "etag": "\"official_audio_etag_001\"",
+    "nextPageToken": null,
+    "prevPageToken": null,
+    "pageInfo": {
+      "totalResults": 1,
+      "resultsPerPage": 50
+    },
+    "items": [
+      {
+        "kind": "youtube#playlistItem",
+        "etag": "\"item_etag_001\"",
+        "id": "PLItem_001",
+        "snippet": {
+          "publishedAt": "2024-01-15T10:00:00Z",
+          "channelId": "UCofficialchannel123",
+          "title": "Official Audio - Song Title",
+          "description": "Official audio for Song Title",
+          "thumbnails": {
+            "default": {
+              "url": "https://i.ytimg.com/vi/video001/default.jpg",
+              "width": 120,
+              "height": 90
+            },
+            "medium": {
+              "url": "https://i.ytimg.com/vi/video001/mqdefault.jpg",
+              "width": 320,
+              "height": 180
+            },
+            "high": {
+              "url": "https://i.ytimg.com/vi/video001/hqdefault.jpg",
+              "width": 480,
+              "height": 360
+            }
+          },
+          "channelTitle": "Official Artist Channel",
+          "playlistId": "PLofficialaudio001",
+          "position": 0,
+          "resourceId": {
+            "kind": "youtube#video",
+            "videoId": "video001official"
+          },
+          "videoOwnerChannelTitle": "Official Artist Channel",
+          "videoOwnerChannelId": "UCofficialchannel123"
+        },
+        "contentDetails": {
+          "videoId": "video001official",
+          "videoPublishedAt": "2024-01-15T10:00:00Z",
+          "duration": "PT4M13S",
+          "dimension": "2d",
+          "definition": "hd",
+          "caption": "false",
+          "licensedContent": false,
+          "regionRestriction": {
+            "allowed": ["US", "GB", "CA", "AU", "DE"]
+          }
+        },
+        "status": {
+          "privacyStatus": "public"
+        }
+      }
+    ]
+  }
+}
