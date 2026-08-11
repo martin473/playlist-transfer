@@ -519,24 +519,83 @@ def accepted_uris_in_source_order(
     return result
 
 
+
+def _find_playlist_by_exact_name(
+    name: str,
+    adapter: SpotifyAdapter,
+    cancel: CancellationToken,
+) -> PlaylistReference:
+    """Find exactly one user-owned playlist with the given exact name.
+
+    This function paginates through all of the user's playlists and returns the
+    single playlist whose name matches the given name exactly (case-sensitive).
+
+    Args:
+        name: The exact name of the playlist to find.
+        adapter: SpotifyAdapter for API calls.
+        cancel: CancellationToken for cancellation.
+
+    Returns:
+        PlaylistReference for the matching playlist.
+
+    Raises:
+        ValueError: If zero or multiple playlists with the exact name are found.
+        AuthenticationRequired: If the user is not authenticated with Spotify.
+        PermissionDenied: If the user lacks permission to view their playlists.
+        RateLimited: If the Spotify API rate limit has been exceeded.
+        CancellationRequested: If the operation is cancelled via the token.
+    """
+    # Check for cancellation
+    cancel.raise_if_cancelled()
+
+    matches: list[PlaylistReference] = []
+    limit = 50
+    offset = 0
+
+    while True:
+        playlists = adapter.user_playlists(cancel=cancel, limit=limit, offset=offset)
+        if not playlists:
+            break
+        for ref in playlists:
+            if ref.name == name:
+                matches.append(ref)
+        offset += limit
+
+    if len(matches) == 0:
+        raise ValueError(f"No playlist found with exact name: '{name}'")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Multiple playlists found with exact name '{name}' ({len(matches)} matches). "
+            "Please use the playlist ID for an exact match."
+        )
+    return matches[0]
+
+
 def resolve_destination(
     request: TransferRequest,
     adapter: SpotifyAdapter,
     cancel: CancellationToken,
+    *,
+    job_id: str | None = None,
+    jobs: JobRepository | None = None,
 ) -> DestinationPlaylist:
     """Resolve create, merge, or replace behavior using the destination name and stored destination ID.
 
     This function determines the appropriate destination playlist based on the transfer mode:
-    - CREATE: Always creates a new playlist with the given name. Does NOT reuse an existing
-      playlist with the same name to avoid silent overwrites.
-    - MERGE: Uses the stored destination_playlist_id from the request.
-    - REPLACE: Uses the stored destination_playlist_id from the request.
+    - CREATE: Creates a new playlist with the given name, unless the job already has a stored
+      destination ID (for resumption), in which case it verifies and reuses that playlist.
+    - MERGE: Uses the destination_name to find an existing playlist by exact name match.
+      If zero or multiple matches are found, raises ValueError.
+    - REPLACE: Uses the stored destination_playlist_id if provided; otherwise uses
+      destination_name to find an existing playlist by exact name match.
     - DRY_RUN: Returns a placeholder DestinationPlaylist for simulation purposes.
 
     Args:
         request: The transfer request containing destination mode and name/ID.
         adapter: The SpotifyAdapter implementation for API calls.
         cancel: CancellationToken to check for cancellation requests.
+        job_id: Optional job ID for checking stored destination ID (for resumability).
+        jobs: Optional JobRepository for retrieving job records.
 
     Returns:
         DestinationPlaylist containing the resolved playlist metadata.
@@ -573,10 +632,53 @@ def resolve_destination(
     mode = request.transfer_mode
 
     if mode.value == "create":
-        # CREATE mode: Always create a new playlist with the given name.
-        # Do NOT check for existing playlists with the same name to avoid silent reuse.
+        # CREATE mode: Create a new playlist with the given name, unless the job
+        # already has a stored destination ID (for resumption).
         if not request.destination_name:
             raise ValueError("destination_name is required for CREATE mode")
+
+        # Check for stored destination ID if job_id and jobs are provided
+        stored_playlist_id: str | None = None
+        if job_id is not None and jobs is not None:
+            job_record = jobs.get(job_id)
+            if job_record is not None:
+                stored_playlist_id = job_record.destination_playlist_id
+
+        # If we have a stored ID, try to verify and reuse it
+        if stored_playlist_id is not None:
+            # Check if the playlist still exists and is accessible
+            # We need to paginate through user's playlists to find it
+            limit = 50
+            offset = 0
+            found_ref = None
+            while True:
+                playlists = adapter.user_playlists(cancel=cancel, limit=limit, offset=offset)
+                if not playlists:
+                    break
+                for ref in playlists:
+                    if ref.playlist_id == stored_playlist_id:
+                        found_ref = ref
+                        break
+                if found_ref:
+                    break
+                offset += limit
+
+            if found_ref is not None:
+                # Reuse the existing playlist
+                is_public = request.visibility == "public" if request.visibility else False
+                return DestinationPlaylist(
+                    playlist_id=found_ref.playlist_id,
+                    name=found_ref.name,
+                    owner_id=found_ref.owner,
+                    public=is_public,
+                    collaborative=False,  # Default
+                    description=None,  # Not available from PlaylistReference
+                    snapshot_id=None,  # Not available from PlaylistReference
+                    external_url=None,  # Not available from PlaylistReference
+                    track_count=0,  # We don't have track count from PlaylistReference
+                )
+            # If the stored ID is not found, we'll create a new playlist
+            # and the caller should update the job record with the new ID
 
         # Create the playlist with default visibility (private unless specified)
         is_public = request.visibility == "public" if request.visibility else False
@@ -602,39 +704,54 @@ def resolve_destination(
             track_count=0,
         )
 
-    elif mode.value in ("merge", "replace"):
-        # MERGE/REPLACE mode: Use the stored destination_playlist_id.
-        if not request.destination_playlist_id:
-            raise ValueError("destination_playlist_id is required for MERGE/REPLACE modes")
+    elif mode.value == "merge":
+        # MERGE mode: Use destination_name to find an existing playlist by exact name.
+        if not request.destination_name:
+            raise ValueError("destination_name is required for MERGE mode")
+        found = _find_playlist_by_exact_name(request.destination_name, adapter, cancel)
 
-        # For merge/replace, we need to fetch the existing playlist details.
-        # However, the SpotifyAdapter doesn't have a direct method to fetch a single playlist.
-        # We can use user_playlists to find it, or we could add a method.
-        # For now, we'll assume the playlist exists and create a DestinationPlaylist
-        # from the known ID. This is a simplified implementation.
+        # Convert PlaylistReference to DestinationPlaylist
+        return DestinationPlaylist(
+            playlist_id=found.playlist_id,
+            name=found.name,
+            owner_id=found.owner,
+            public=False,  # Default; we don't have visibility from PlaylistReference
+            collaborative=False,  # Default
+            description=None,
+            snapshot_id=None,
+            external_url=None,
+            track_count=0,  # We don't have track count from PlaylistReference
+        )
 
-        # Fetch user's playlists to find the playlist by ID
-        # Note: This is a paginated search; we'll fetch enough to find the playlist.
-        # In practice, we might want to add a dedicated get_playlist method to the adapter.
-        limit = 50
-        offset = 0
-        found = None
-        while True:
-            playlists = adapter.user_playlists(cancel=cancel, limit=limit, offset=offset)
-            if not playlists:
-                break
-            for ref in playlists:
-                if ref.playlist_id == request.destination_playlist_id:
-                    found = ref
+    elif mode.value == "replace":
+        # REPLACE mode: Use destination_playlist_id if provided, otherwise use destination_name.
+        if request.destination_playlist_id:
+            # Use the stored ID: find the playlist by ID
+            # Paginate through user's playlists to find the playlist by ID
+            limit = 50
+            offset = 0
+            found = None
+            while True:
+                playlists = adapter.user_playlists(cancel=cancel, limit=limit, offset=offset)
+                if not playlists:
                     break
-            if found:
-                break
-            offset += limit
+                for ref in playlists:
+                    if ref.playlist_id == request.destination_playlist_id:
+                        found = ref
+                        break
+                if found:
+                    break
+                offset += limit
 
-        if found is None:
-            raise ValueError(
-                f"Playlist with ID {request.destination_playlist_id} not found for the authenticated user"
-            )
+            if found is None:
+                raise ValueError(
+                    f"Playlist with ID {request.destination_playlist_id} not found for the authenticated user"
+                )
+        elif request.destination_name:
+            # Use exact name match
+            found = _find_playlist_by_exact_name(request.destination_name, adapter, cancel)
+        else:
+            raise ValueError("either destination_playlist_id or destination_name is required for REPLACE mode")
 
         # Convert PlaylistReference to DestinationPlaylist
         return DestinationPlaylist(
