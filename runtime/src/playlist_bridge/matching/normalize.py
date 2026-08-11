@@ -88,27 +88,31 @@ def normalize_unicode_text(value: str) -> str:
     for char, replacement in dash_map.items():
         normalized = normalized.replace(char, replacement)
 
-    # Step 5: Normalize separator characters around words
-    # Single punctuation marks that are likely word separators should be
-    # replaced with a single space, but only when they appear between
-    # word characters or at boundaries.
-    # 
-    # First, handle parentheses - they should be removed if they contain
-    # common parenthetical markers, but preserved otherwise.
-    # For simplicity, we remove common parenthetical suffixes like (Remastered)
+    # Step 5: Normalize repeated separators
+    # Collapse repeated separator characters without removing meaningful
+    # characters. Separators include: spaces, dashes, dots, slashes, etc.
+    #
+    # First, handle parentheses - remove parenthetical content that is
+    # often just metadata (e.g., (Remastered), (Live), etc.)
     normalized = re.sub(r"\s*\([^)]*\)\s*", " ", normalized)
     
-    # Then handle dash-like separators: replace any sequence of dash-like
-    # characters (including spaces around them) with a single space
+    # Normalize dash-like separators: any dash variant (including multiple)
+    # with optional surrounding whitespace becomes a single space
     # This catches "Track - Remix", "Track--Remix", "Track—Remix"
-    normalized = re.sub(r"\s*[\-–—]\s*", " ", normalized)
+    normalized = re.sub(r"\s*[-–—]\s*", " ", normalized)
+    # Handle multiple dashes in a row (e.g., "Track---Remix")
+    normalized = re.sub(r"[-–—]{2,}", " ", normalized)
     
-    # Collapse runs of punctuation/separator characters that are not
-    # normal word characters or whitespace. But preserve single tildes
-    # and other intentional punctuation if they appear.
-    # For tildes, we preserve them when they appear at the start of a word
-    # For other punctuation, we collapse runs.
-    normalized = re.sub(r"[\.,;:/|\\]{2,}", " ", normalized)
+    # Collapse repeated punctuation separators to a single space
+    # This includes: . , ; : / | \
+    # We only collapse if there are 2 or more in a row
+    normalized = re.sub(r"[.,;:/|\\]{2,}", " ", normalized)
+    
+    # Handle repeated separators that combine punctuation and spaces
+    # e.g., "Track . . . Remix" -> "Track Remix"
+    # But preserve single punctuation marks with spaces around them
+    # We only collapse if there are 2 or more punctuation marks with spaces
+    normalized = re.sub(r"\s+[.,;:/|\\](?:\s+[.,;:/|\\])+\s+", " ", normalized)
     
     # Clean up any remaining runs of whitespace
     normalized = re.sub(r"\s+", " ", normalized)
