@@ -254,5 +254,133 @@
         }
       }
     ]
+  },
+  "live_recording": {
+    "kind": "youtube#playlistItemListResponse",
+    "etag": "\"live_recording_etag_005\"",
+    "nextPageToken": null,
+    "prevPageToken": null,
+    "pageInfo": {
+      "totalResults": 1,
+      "resultsPerPage": 50
+    },
+    "items": [
+      {
+        "kind": "youtube#playlistItem",
+        "etag": "\"item_etag_005\"",
+        "id": "PLItem_005",
+        "snippet": {
+          "publishedAt": "2024-05-20T20:00:00Z",
+          "channelId": "UClivechannel101",
+          "title": "Live Recording - Song Title (Live at Venue)",
+          "description": "Live recording of Song Title from concert",
+          "thumbnails": {
+            "default": {
+              "url": "https://i.ytimg.com/vi/video005/default.jpg",
+              "width": 120,
+              "height": 90
+            },
+            "medium": {
+              "url": "https://i.ytimg.com/vi/video005/mqdefault.jpg",
+              "width": 320,
+              "height": 180
+            },
+            "high": {
+              "url": "https://i.ytimg.com/vi/video005/hqdefault.jpg",
+              "width": 480,
+              "height": 360
+            }
+          },
+          "channelTitle": "Live Artist Channel",
+          "playlistId": "PLlive005",
+          "position": 0,
+          "resourceId": {
+            "kind": "youtube#video",
+            "videoId": "video005live"
+          },
+          "videoOwnerChannelTitle": "Live Artist Channel",
+          "videoOwnerChannelId": "UClivechannel101"
+        },
+        "contentDetails": {
+          "videoId": "video005live",
+          "videoPublishedAt": "2024-05-20T20:00:00Z",
+          "duration": "PT8M30S",
+          "dimension": "2d",
+          "definition": "hd",
+          "caption": "false",
+          "licensedContent": false,
+          "regionRestriction": {
+            "allowed": ["US", "GB", "CA", "AU", "DE", "FR"]
+          }
+        },
+        "status": {
+          "privacyStatus": "public"
+        }
+      }
+    ]
+  },
+  "full_dj_mix": {
+    "kind": "youtube#playlistItemListResponse",
+    "etag": "\"full_dj_mix_etag_006\"",
+    "nextPageToken": null,
+    "prevPageToken": null,
+    "pageInfo": {
+      "totalResults": 1,
+      "resultsPerPage": 50
+    },
+    "items": [
+      {
+        "kind": "youtube#playlistItem",
+        "etag": "\"item_etag_006\"",
+        "id": "PLItem_006",
+        "snippet": {
+          "publishedAt": "2024-06-10T15:00:00Z",
+          "channelId": "UCdjchannel202",
+          "title": "Full DJ Mix - Essential House Mix 2024",
+          "description": "Full DJ mix featuring 2 hours of house music, mixed live by DJ Essential",
+          "thumbnails": {
+            "default": {
+              "url": "https://i.ytimg.com/vi/video006/default.jpg",
+              "width": 120,
+              "height": 90
+            },
+            "medium": {
+              "url": "https://i.ytimg.com/vi/video006/mqdefault.jpg",
+              "width": 320,
+              "height": 180
+            },
+            "high": {
+              "url": "https://i.ytimg.com/vi/video006/hqdefault.jpg",
+              "width": 480,
+              "height": 360
+            }
+          },
+          "channelTitle": "DJ Essential Channel",
+          "playlistId": "PLdjmix006",
+          "position": 0,
+          "resourceId": {
+            "kind": "youtube#video",
+            "videoId": "video006djmix"
+          },
+          "videoOwnerChannelTitle": "DJ Essential Channel",
+          "videoOwnerChannelId": "UCdjchannel202"
+        },
+        "contentDetails": {
+          "videoId": "video006djmix",
+          "videoPublishedAt": "2024-06-10T15:00:00Z",
+          "duration": "PT2H4M38S",
+          "dimension": "2d",
+          "definition": "hd",
+          "caption": "false",
+          "licensedContent": false,
+          "regionRestriction": {
+            "allowed": ["US", "GB", "CA", "AU", "DE", "FR", "NL", "ES"]
+          }
+        },
+        "status": {
+          "privacyStatus": "public"
+        }
+      }
+    ]
   }
 }
